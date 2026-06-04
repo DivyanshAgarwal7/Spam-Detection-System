@@ -28,6 +28,14 @@ Prediction (Spam / Ham / Offensive)
 ```
 
 ---
+## System Stability & Environment Fixes
+This update addresses critical runtime issues that prevented the system from executing in the local development environment:
+
+* **Security Policy Compliance:** Migrated the project to a directory with appropriate execution permissions to resolve `DLL load` errors.
+* **Model Loading Error:** Corrected file path references to ensure the ML models are properly detected at runtime.
+* **API Stability:** Fixed `500 Internal Server Error` by correctly serializing NumPy model outputs to JSON.
+
+For a detailed breakdown, please refer to the recently merged Pull Request.
 
 ## 🧠 Machine Learning Model
 
