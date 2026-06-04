@@ -6,7 +6,7 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY linear_svm_model.pkl .
-COPY tfidf_vectorizer.pkl .
+COPY backend/tfidf_vectorizer.pkl .
 COPY label_encoder.pkl .
 COPY backend/api.py .
 
