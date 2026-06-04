@@ -254,6 +254,22 @@ mysql -u root -p < backend/schema.sql
 | GET | `/api/emails/count/spam` | Count total spam emails |
 | GET | `/api/emails/count/legitimate` | Count total legitimate emails |
 
+### Export Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/emails/export?format=csv` | Download all emails as CSV |
+| GET | `/api/emails/export?format=pdf` | Download all emails as PDF report |
+
+### CSV Export Format
+email_id, subject, sender, is_spam, timestamp
+1, Win a FREE iPhone!!!, promo@spam.com, Spam, 2024-01-01 10:00:00
+2, Team standup at 10am, manager@company.com, Legitimate, 2024-01-01 11:00:00
+
+### PDF Report Includes
+- Summary: total emails, spam count, legitimate count
+- Full table with all email records
+
 ### Email Record Fields
 
 - `email_id` — Auto-generated unique ID
