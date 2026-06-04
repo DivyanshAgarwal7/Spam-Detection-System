@@ -33,6 +33,10 @@ const register = async (req, res) => {
     });
   } catch (err) {
     console.error('Register error:', err);
+    if (err.code === 11000) {
+      const field = err.keyPattern?.email ? 'Email' : 'Username';
+      return res.status(400).json({ error: `${field} is already in use.` });
+    }
     res.status(500).json({ error: 'Server error. Please try again.' });
   }
 };

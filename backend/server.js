@@ -1,4 +1,6 @@
 require("dotenv").config();
+const dns = require("dns");
+dns.setServers(["8.8.8.8", "1.1.1.1"]); // ensure SRV records resolve on all networks
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
