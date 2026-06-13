@@ -45,15 +45,15 @@ const logout = () => {
   };
 
   const getColor = () => {
-    if (result === "ham") return "text-green-600";
-    if (result === "spam") return "text-red-600";
+    if (result === "ham" || result === "safe") return "text-green-600";
+    if (result === "spam" || result === "malicious") return "text-red-600";
     if (result === "smishing") return "text-orange-500";
     return "text-gray-600";
   };
 
   const getBg = () => {
-    if (result === "ham") return "bg-[#81912F]/25 backdrop-blur-md border border-white/30";
-    if (result === "spam") return "bg-red-400/20 backdrop-blur-md border border-white/30";
+    if (result === "ham" || result === "safe") return "bg-[#81912F]/25 backdrop-blur-md border border-white/30";
+    if (result === "spam" || result === "malicious") return "bg-red-400/20 backdrop-blur-md border border-white/30";
     if (result === "smishing") return "bg-orange-400/20 backdrop-blur-md border border-white/30";
     return "bg-white/20 backdrop-blur-md border border-white/30";
   };
@@ -105,7 +105,7 @@ const logout = () => {
           </h1>
 
           <p className={`font-semibold text-sm mb-4 ${darkMode ? "text-gray-300" : "text-gray-700"}`}>
-            Analyze messages & emails instantly
+            Analyze messages, emails & URLs instantly
           </p>
 
           <div className="flex mb-4 bg-gray-100 rounded-xl overflow-hidden">
@@ -118,6 +118,7 @@ const logout = () => {
             >
               <option value="message">Message</option>
               <option value="email">Email</option>
+              <option value="url">URL</option>
             </select>
           </div>
 
@@ -126,7 +127,11 @@ const logout = () => {
               darkMode ? "bg-gray-700 text-white" : "bg-white text-black"
             }`}
             rows="4"
-            placeholder={type === "message" ? "Type your message..." : "Paste your email content..."}
+            placeholder={
+              type === "url" ? "Enter URL to check..." :
+              type === "message" ? "Type your message..." :
+              "Paste your email content..."
+            }
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
@@ -135,7 +140,7 @@ const logout = () => {
             onClick={handlePredict}
             className="mt-4 w-full py-3 rounded-xl font-medium bg-indigo-500 text-white hover:bg-indigo-600 active:scale-95 transition-all"
           >
-            {loading ? "Analyzing..." : `Analyze ${type}`}
+            {loading ? "Analyzing..." : `Analyze ${type === "url" ? "URL" : type}`}
           </button>
 
           {result && (
@@ -144,6 +149,8 @@ const logout = () => {
                 {result === "ham" && "✅ Safe Message"}
                 {result === "spam" && "❌ Spam Detected"}
                 {result === "smishing" && "⚠️ Fraud Alert"}
+                {result === "safe" && "✅ Safe URL"}
+                {result === "malicious" && "🚨 Malicious URL"}
                 {result === "Error" && "⚠️ Something went wrong"}
               </div>
             </div>
@@ -166,7 +173,7 @@ const logout = () => {
             </div>
           )}
 
-          {result && result !== "Error" && (
+          {result && result !== "Error" && type !== "url" && (
             <FeedbackWidget
               key={`${text}|${result}|${confidence}`}
               text={text}
