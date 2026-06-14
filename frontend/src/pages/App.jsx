@@ -82,7 +82,10 @@ function SpamDetector() {
     if (result === "ham" || result === "safe") return "text-green-600";
     if (result === "spam" || result === "malicious") return "text-red-600";
     if (result === "smishing") return "text-orange-500";
-    return "text-gray-600";
+    if (result === "Error") {
+    return darkMode ? "text-yellow-300" : "text-yellow-700";
+  }
+  return darkMode ? "text-gray-300" : "text-gray-600";
   };
 
   const getBg = () => {
@@ -265,4 +268,4 @@ function SpamDetector() {
   );
 }
 
-export default App;
+export default SpamDetector;
