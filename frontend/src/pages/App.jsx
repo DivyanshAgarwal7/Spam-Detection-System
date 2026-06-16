@@ -4,6 +4,7 @@ import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import "../App.css";
 import FeatureImportance from "../components/FeatureImportance";
+import WordCloud from '../components/WordCloud';
 import FeedbackWidget from "../components/FeedbackWidget";
 import Login from "./Login.jsx";
 import Register from "./Register.jsx";
@@ -236,6 +237,7 @@ function SpamDetector() {
               </div>
             </div>
           )}
+          <WordCloud darkMode={darkMode} />
 
           {result && confidence !== null && result !== "Error" && (
             <div className="mt-4 text-left">
