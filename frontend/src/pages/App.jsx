@@ -160,7 +160,7 @@ const logout = () => {
                   className={`h-2 rounded-full transition-all duration-500 ${
                     result === "ham" ? "bg-green-500" :
                     result === "spam" ? "bg-red-500" : "bg-orange-500"
-                  }
+                  }`}
                   style={{ width: `${confidencePct}%` }}
                 />
               </div>
