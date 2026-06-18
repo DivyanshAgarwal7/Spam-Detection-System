@@ -1,0 +1,21 @@
+name: Sync Labels from Issue
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+      issues: read
+
+    steps:
+      - name: Copy labels from linked issues
+        uses: jasonatwood/copy-issue-labels@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}

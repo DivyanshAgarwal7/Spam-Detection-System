@@ -6,3 +6,11 @@ fastapi
 uvicorn
 mysql-connector-python
 fpdf2
+python-whois>=0.8.0
+dnspython>=2.4.0
+flask-limiter>=3.5.0
+pytest
+shap
+lime
+flask-cors
+# Email authenticity verification module uses standard libraries (email, re)

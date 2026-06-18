@@ -1,6 +1,9 @@
 const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
+const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const generateToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
@@ -83,4 +86,69 @@ const getMe = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe };
+const googleLogin = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ error: 'Google ID Token is required.' });
+    }
+
+    const ticket = await client.verifyIdToken({
+      idToken: idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture } = payload;
+
+    let user = await User.findOne({ email });
+
+    if (user) {
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.provider = 'google';
+        if (picture && !user.avatarUrl) {
+          user.avatarUrl = picture;
+        }
+        await user.save();
+      }
+    } else {
+      let baseUsername = name ? name.replace(/\s+/g, '').toLowerCase() : email.split('@')[0];
+      let username = baseUsername;
+      let userExists = await User.findOne({ username });
+      let counter = 1;
+      while (userExists) {
+        username = `${baseUsername}${counter}`;
+        userExists = await User.findOne({ username });
+        counter++;
+      }
+
+      user = await User.create({
+        username,
+        email,
+        googleId,
+        avatarUrl: picture,
+        provider: 'google',
+      });
+    }
+
+    const token = generateToken(user._id);
+
+    res.json({
+      message: 'Login successful!',
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+        provider: user.provider,
+      },
+    });
+  } catch (err) {
+    console.error('Google Auth Error:', err);
+    res.status(400).json({ error: 'Invalid Google token.' });
+  }
+};
+
+module.exports = { register, login, getMe, googleLogin };

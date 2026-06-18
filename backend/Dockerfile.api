@@ -8,6 +8,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY linear_svm_model.pkl .
 COPY backend/tfidf_vectorizer.pkl .
 COPY label_encoder.pkl .
+COPY backend/url_detector.pkl .
+COPY backend/url_vectorizer.pkl .
+COPY backend/domain_checker.py .
+COPY backend/email_header_analyzer.py .
 COPY backend/api.py .
 
 EXPOSE 5000

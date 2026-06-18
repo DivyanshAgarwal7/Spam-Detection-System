@@ -1,12 +1,19 @@
 import os
 import joblib
+import time
+import logging
 import numpy as np
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from backend.xai_service import XAIService
 from backend.config import FRONTEND_URL, BASE_URL, PORT
+
+# ── Configure Logging ──────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("spam_detection_logger")
+
 xai_service = XAIService()
 
 # ── Resolve model paths relative to this file ────────────────────────────────
@@ -37,6 +44,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Logging Middleware ────────────────────────────────────────────────────────
+@app.middleware("http")
+async def log_requests_middleware(request: Request, call_next):
+    start_time = time.time()
+    method = request.method
+    path = request.url.path
+    client_host = request.client.host if request.client else "unknown"
+    
+    logger.info(f"Incoming request: {method} {path} from {client_host}")
+
+    response = await call_next(request)
+
+    process_time = (time.time() - start_time) * 1000  # Duration in milliseconds
+    status_code = response.status_code
+    
+    logger.info(f"Completed request: {method} {path} | Status: {status_code} | Duration: {process_time:.2f}ms")
+    
+    # Inject processing metrics into response headers for visibility
+    response.headers["X-Process-Time"] = f"{process_time:.2f}ms"
+    
+    return response
 
 # ── Request schema ────────────────────────────────────────────────────────────
 class PredictIn(BaseModel):

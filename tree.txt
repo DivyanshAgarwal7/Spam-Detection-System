@@ -1,0 +1,125 @@
+Folder PATH listing
+Volume serial number is 000000E8 CA57:27F3
+C:.
+|   .dockerignore
+|   .DS_Store
+|   .env.example
+|   .gitignore
+|   CONTRIBUTING.md
+|   docker-compose.yml
+|   label_encoder.pkl
+|   LICENSE.txt
+|   linear_svm_model.pkl
+|   PROJECT_GOAL.md
+|   README.md
+|   tree.txt
+|   
++---backend
+|   |   .dockerignore
+|   |   .env
+|   |   .env.example
+|   |   .gitignore
+|   |   api.py
+|   |   config.py
+|   |   database.py
+|   |   Dockerfile.api
+|   |   Dockerfile.node
+|   |   emails.py
+|   |   export.py
+|   |   label_encoder.pkl
+|   |   linear_svm_model.pkl
+|   |   main.py
+|   |   package-lock.json
+|   |   package.json
+|   |   requirements.txt
+|   |   schema.sql
+|   |   server.js
+|   |   tfidf_vectorizer.pkl
+|   |   xai_service.py
+|   |   
+|   +---.ruff_cache
+|   |   |   .gitignore
+|   |   |   CACHEDIR.TAG
+|   |   |   
+|   |   \---0.14.4
+|   |           8821765438871567037
+|   |           
+|   +---controllers
+|   |       authController.js
+|   |       
+|   +---middleware
+|   |       authMiddleware.js
+|   |       
+|   +---models
+|   |       User.js
+|   |       
+|   \---routes
+|           authRoutes.js
+|           
++---frontend
+|   |   .dockerignore
+|   |   .gitignore
+|   |   Dockerfile
+|   |   eslint.config.js
+|   |   index.html
+|   |   nginx.conf
+|   |   package-lock.json
+|   |   package.json
+|   |   vite.config.js
+|   |   
+|   +---public
+|   |       vite.svg
+|   |       
+|   \---src
+|       |   App.css
+|       |   App.jsx
+|       |   index.css
+|       |   main.jsx
+|       |   
+|       +---assets
+|       |       react.svg
+|       |       
+|       +---components
+|       |       FeatureImportance.jsx
+|       |       ProtectedRoute.jsx
+|       |       
+|       +---context
+|       |       AuthContext.jsx
+|       |       
+|       +---pages
+|       |       Login.jsx
+|       |       Register.jsx
+|       |       
+|       \---utils
+|               axiosInstance.js
+|               
+\---spamdetection
+    |   .gitignore
+    |   app.json
+    |   eslint.config.js
+    |   package-lock.json
+    |   package.json
+    |   README.md
+    |   tsconfig.json
+    |   
+    +---.vscode
+    |       extensions.json
+    |       settings.json
+    |       
+    +---app
+    |       index.tsx
+    |       _layout.tsx
+    |       
+    \---assets
+        \---images
+                android-icon-background.png
+                android-icon-foreground.png
+                android-icon-monochrome.png
+                favicon.png
+                icon.png
+                partial-react-logo.png
+                react-logo.png
+                react-logo@2x.png
+                react-logo@3x.png
+                splash-icon.png
+                

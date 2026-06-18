@@ -43,7 +43,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URI=/predict
+        - VITE_API_URI=
     container_name: spam_frontend
     ports:
       - "80:80"

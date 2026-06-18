@@ -1,4 +1,5 @@
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Docker Build](https://github.com/Userunknown84/Spam-Detection-System/actions/workflows/docker.yml/badge.svg)
 
 # 🚀 Spam Detection System
 
@@ -26,6 +27,14 @@ Python ML API (Model Inference)
         ↓
 Prediction (Spam / Ham / Offensive)
 ```
+
+---
+## Routes
+
+Python: (http://localhost:5000 or http://127.0.0.1:5000)
+Node: (http://localhost:3000)
+Reactjs: (http://localhost:5173)
+
 
 ---
 ## System Stability & Environment Fixes
@@ -130,6 +139,15 @@ if __name__ == "__main__":
 npm install express axios cors
 ```
 
+## Mongo Db Atlas Backend
+.env
+
+MONGODB_URI=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/spamdetection?retryWrites=true&w=majority
+JWT_SECRET=your_super_secret_jwt_key_change_this_in_production
+JWT_EXPIRES_IN=7d
+
+
+
 ### ⚙️ Server Code
 
 ```javascript
@@ -233,7 +251,7 @@ export default function App() {
 ```
 ---
 
-## 🗄️ Email Classification Database
+## 🗄️ Email Classification Database (Flask)
 
 A MySQL-based system to store and manage classified email records.
 
@@ -280,6 +298,58 @@ email_id, subject, sender, is_spam, timestamp
 
 ---
 
+## 🔁 User Feedback Loop
+
+After every prediction, the web app asks **"Was this prediction correct?"**:
+
+* ✅ **Yes** — records the prediction as confirmed correct
+* ❌ **No** — shows a dropdown to pick the correct label (`ham`, `spam`, `smishing`), then submits the correction
+
+### How it flows
+
+```
+React Widget → POST /feedback (Node backend) → POST /feedback (Flask ML API) → feedback_store.csv
+```
+
+### `POST /feedback`
+
+Available on both the Node backend (`/feedback`, requires authentication) and the Flask ML API (`/feedback`).
+
+**Request body:**
+```json
+{
+  "text": "Congratulations! You won a free prize, click here",
+  "predicted_label": "ham",
+  "correct_label": "spam"
+}
+```
+
+**Responses:**
+* `201` — `{"message": "Feedback recorded. Thank you!"}`
+* `400` — `{"error": "Invalid feedback data"}` if `text` is empty or `correct_label` is not one of `ham`, `spam`, `smishing`
+
+Feedback is appended to `backend/feedback_store.csv` (gitignored) with columns:
+
+| Column | Description |
+|--------|-------------|
+| `text` | The original input text |
+| `predicted_label` | What the model predicted |
+| `correct_label` | What the user said it should be |
+| `submitted_at` | UTC timestamp |
+
+### Retraining the model
+
+Once enough feedback has accumulated, run:
+
+```bash
+cd backend
+python retrain.py
+```
+
+This merges `feedback_store.csv` with the original training dataset (`DATASET_PATH`, default `dataset.csv`), retrains the TF-IDF vectorizer, LinearSVC model and label encoder, and overwrites `linear_svm_model.pkl`, `tfidf_vectorizer.pkl` and `label_encoder.pkl`.
+
+---
+
 ## 🔐 Features
 
 * ✅ Spam / Smishing Detection
@@ -287,6 +357,205 @@ email_id, subject, sender, is_spam, timestamp
 * ✅ Real-time Prediction API
 * ✅ Cross-platform (Web + Mobile)
 * ✅ Scalable Architecture
+
+---
+
+## 🛡️ Email Header Analysis for Sender Verification
+
+Features:
+* **SPF validation**: Verifies if the email sender is authorized by the domain's SPF records.
+* **DKIM validation**: Confirms the email signature matches the sender's public keys.
+* **DMARC validation**: Validates whether alignment passes based on SPF/DKIM verification results.
+* **Return-Path analysis**: Checks for mismatches between the `From` address domain and `Return-Path` domain.
+* **Sender verification**: Identifies display name domain mismatch or domain alignment anomalies.
+
+### Scoring Logic
+* SPF Failure: +30 points
+* DKIM Failure: +30 points
+* DMARC Failure: +30 points
+* Return-Path Mismatch: +20 points
+* Domain Mismatch: +20 points
+
+### Trust Levels
+* `0–20` score: **Trusted**
+* `21–60` score: **Suspicious**
+* `61+` score: **High Risk**
+
+### Endpoint
+
+#### `POST /analyze-email-header`
+Supports both Option A (JSON body) and Option B (`multipart/form-data` with EML file upload).
+
+**Request (Option A - JSON):**
+```json
+{
+  "headers": "From: Alice <alice@example.com>\nReturn-Path: <spammer@evil.com>..."
+}
+```
+
+**Request (Option B - multipart/form-data):**
+Submit files (EML format) under key `file`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "trust_level": "Suspicious",
+  "risk_score": 45,
+  "findings": [
+    "SPF validation failed",
+    "Return-Path mismatch detected"
+  ]
+}
+```
+
+---
+
+## 📬 Gmail & Outlook Integration for Automatic Email Scanning
+
+Allows users to link their Gmail and Outlook accounts securely via OAuth 2.0 and automatically scan the latest incoming emails.
+
+### Features
+* **OAuth 2.0 Integration**: Authorize with Google and Microsoft to scan live inboxes.
+* **Inline Risk Scoring**: Integrates directly with the Sender Verification analysis module to show trust levels (Trusted, Suspicious, High Risk) for each email based on SPF, DKIM, and DMARC headers.
+* **Aggregated Insights**: Displays metrics cards showing Total, Spam/Risk, and Clean emails in the scanned inbox batch.
+* **Collapsible Email Reports**: Expand any scanned email to view the snippet and domain alignment validation details.
+
+### Environment Setup
+
+Add these credentials to your backend `.env` file:
+```env
+# Google OAuth 2.0 Credentials
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+
+# Microsoft Graph OAuth 2.0 Credentials
+MICROSOFT_CLIENT_ID=your_microsoft_client_id
+MICROSOFT_CLIENT_SECRET=your_microsoft_client_secret
+```
+
+### Endpoints
+
+| Method | Endpoint | Access | Description |
+|---|---|---|---|
+| `GET` | `/gmail/auth-url` | Protected | Returns the Google OAuth 2.0 consent page URL |
+| `GET` | `/gmail/connect` | Protected | Exchanges the authorization code for Gmail access/refresh tokens |
+| `GET` | `/gmail/emails` | Protected | Fetches up to 50 of the latest Gmail emails |
+| `GET` | `/outlook/auth-url` | Protected | Returns the Microsoft Graph OAuth 2.0 consent page URL |
+| `GET` | `/outlook/connect` | Protected | Exchanges the authorization code for Microsoft Graph tokens |
+| `GET` | `/outlook/emails` | Protected | Fetches up to 50 of the latest Outlook emails |
+| `POST` | `/scan-emails` | Protected | Fetches latest emails for provider and runs ML classification and header verification |
+
+---
+
+## 🧠 Spam Pattern Insights & Analytics Dashboard
+
+Features:
+* **Top keywords frequency**: Displays the most common keywords associated with threats.
+* **Trending phrases**: Analyzes bigrams/trigrams to identify key word sequences in spam (e.g. `claim your prize`).
+* **Suspicious terms tracking**: Extracts recently flagged tokens from threat classifications.
+* **Category indicators**: Groups common threat indicators by category (Spam, Smishing, Offensive).
+
+### Endpoint
+
+#### `GET /spam-insights`
+Available on both the Node backend (`/spam-insights`, requires authentication) and the Flask ML API (`/spam-insights`).
+
+**Query Parameters:**
+- `limit` (optional, default: 10): Limits the number of keywords/phrases returned.
+- `category` (optional, e.g. `spam`): Filters the source metrics to a specific threat category.
+
+**Example Response:**
+```json
+{
+  "top_keywords": [
+    {"keyword": "free", "count": 45},
+    {"keyword": "prize", "count": 35}
+  ],
+  "trending_phrases": [
+    {"phrase": "click here now", "count": 25},
+    {"phrase": "claim your prize", "count": 20}
+  ],
+  "recent_suspicious_terms": [
+    "crypto giveaway",
+    "verify wallet"
+  ],
+  "category_indicators": {
+    "spam": ["free", "prize", "winner"],
+    "smishing": ["otp", "verify", "bank"],
+    "offensive": ["abusive", "hate"]
+  }
+}
+```
+
+---
+
+## 📁 Bulk Spam Detection
+
+Features:
+* **CSV upload**: Upload a CSV file containing either a `text` or `message` column header (case-insensitive) to run batch predictions.
+* **TXT upload**: Upload a TXT file containing one message per non-empty line.
+* **Bulk predictions**: Batch inference is performed efficiently on the ML model.
+* **Detection statistics**: Displays total messages, spam/non-spam counts, and spam percentages.
+* **CSV report export**: Downloadable CSV file containing the original message and predicted classification.
+
+### Endpoints
+
+#### `POST /bulk-predict`
+Requires `multipart/form-data` file upload with a key name of `file`.
+
+**Example Response:**
+```json
+{
+  "total_messages": 3,
+  "spam_count": 2,
+  "non_spam_count": 1,
+  "spam_percentage": 66.67,
+  "results": [
+    {
+      "message": "Congratulations! You won a free prize",
+      "prediction": "spam"
+    },
+    {
+      "message": "Meeting tomorrow at 10am",
+      "prediction": "ham"
+    }
+  ]
+}
+```
+
+#### `POST /bulk-predict/export`
+Requires `multipart/form-data` file upload with a key name of `file`. Returns a downloadable CSV report file:
+```csv
+message,prediction
+Congratulations! You won a free prize,spam
+Meeting tomorrow at 10am,ham
+```
+
+---
+
+## 🎨 Theme Customization System
+
+The frontend now includes a fully customizable theme system that allows users to personalize the application's appearance.
+
+## Features
+Added 5 unique themes:
+Ocean
+Sunset
+Forest
+Purple
+Mono
+
+## Theme selector accessible through the 🎨 Theme button in the top-right corner.
+Full support for Light Mode and Dark Mode across all themes.
+Dynamic adaptation of:
+Background gradients
+Cards and panels
+Buttons and accent colors
+Interactive UI elements
+Theme preferences are maintained throughout the user's active session.
+Seamless theme switching without affecting application functionality.
+
 
 ---
 
@@ -314,6 +583,8 @@ email_id, subject, sender, is_spam, timestamp
 ---
 
 ## 🐳 Running with Docker
+
+> ✅ All three images (`ml-api`, `node-backend`, `frontend`) are automatically built and the ML API is smoke-tested via [GitHub Actions](.github/workflows/docker.yml) on every push and pull request to `main`, so the Dockerfiles always stay in sync with the latest code.
 
 ### Prerequisites
 - [Docker](https://docs.docker.com/get-docker/) installed
