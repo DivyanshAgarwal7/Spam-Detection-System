@@ -5,6 +5,9 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const mongoose = require("mongoose");
+const multer = require("multer");
+const upload = multer();
+const FormData = require("form-data");
 
 const app = express();
 
@@ -133,6 +136,100 @@ app.post("/analyze-email-header", protect, async (req, res) => {
       });
     }
     if (error.response) {
+      return res.status(error.response.status).json(error.response.data);
+    }
+    console.error(error.message);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+});
+
+
+// Protected: Bulk prediction
+app.post("/bulk-predict", protect, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Check file size
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: "File size exceeds limit of 2MB" });
+    }
+
+    const form = new FormData();
+    form.append("file", req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+
+    const response = await axios.post(`${ML_API_BASE}/bulk-predict`, form, {
+      headers: {
+        ...form.getHeaders(),
+      },
+    });
+
+    res.json(response.data);
+  } catch (error) {
+    if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+      console.error("Flask ML API is unavailable:", error.message);
+      return res.status(503).json({
+        error: "Flask ML API is currently unavailable. Please try again later.",
+      });
+    }
+    if (error.response) {
+      return res.status(error.response.status).json(error.response.data);
+    }
+    console.error(error.message);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+});
+
+// Protected: Export bulk predictions as CSV
+app.post("/bulk-predict/export", protect, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Check file size
+    if (req.file.size > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: "File size exceeds limit of 2MB" });
+    }
+
+    const form = new FormData();
+    form.append("file", req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+
+    const response = await axios.post(`${ML_API_BASE}/bulk-predict/export`, form, {
+      headers: {
+        ...form.getHeaders(),
+      },
+      responseType: "stream",
+    });
+
+    res.setHeader("Content-Type", response.headers["content-type"] || "text/csv");
+    if (response.headers["content-disposition"]) {
+      res.setHeader("Content-Disposition", response.headers["content-disposition"]);
+    } else {
+      res.setHeader("Content-Disposition", 'attachment; filename="bulk_spam_predictions.csv"');
+    }
+
+    response.data.pipe(res);
+  } catch (error) {
+    if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+      console.error("Flask ML API is unavailable:", error.message);
+      return res.status(503).json({
+        error: "Flask ML API is currently unavailable. Please try again later.",
+      });
+    }
+    if (error.response) {
+      if (typeof error.response.data.pipe === "function") {
+        res.status(error.response.status);
+        error.response.data.pipe(res);
+        return;
+      }
       return res.status(error.response.status).json(error.response.data);
     }
     console.error(error.message);

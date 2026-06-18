@@ -24,6 +24,13 @@ if not MODEL_PATH or not VECTORIZER_PATH or not LABEL_ENCODER_PATH:
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
 label_encoder = joblib.load(LABEL_ENCODER_PATH)
+
+app.model = model
+app.vectorizer = vectorizer
+app.label_encoder = label_encoder
+
+from bulk_predict import bulk_predict_bp
+app.register_blueprint(bulk_predict_bp)
 BASE_DIR = Path(__file__).resolve().parent
 URL_MODEL_PATH = os.getenv(
     "URL_MODEL_PATH",

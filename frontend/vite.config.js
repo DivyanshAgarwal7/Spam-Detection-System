@@ -11,6 +11,7 @@ export default defineConfig({
       '/predict': 'http://localhost:3000',
       '/feedback': 'http://localhost:3000',
       '/analyze-email-header': 'http://localhost:3000',
+      '/bulk-predict': 'http://localhost:3000',
     },
   },
 })

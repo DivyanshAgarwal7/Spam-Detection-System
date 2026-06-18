@@ -352,6 +352,50 @@ This merges `feedback_store.csv` with the original training dataset (`DATASET_PA
 
 ---
 
+## 📁 Bulk Spam Detection
+
+Features:
+* **CSV upload**: Upload a CSV file containing either a `text` or `message` column header (case-insensitive) to run batch predictions.
+* **TXT upload**: Upload a TXT file containing one message per non-empty line.
+* **Bulk predictions**: Batch inference is performed efficiently on the ML model.
+* **Detection statistics**: Displays total messages, spam/non-spam counts, and spam percentages.
+* **CSV report export**: Downloadable CSV file containing the original message and predicted classification.
+
+### Endpoints
+
+#### `POST /bulk-predict`
+Requires `multipart/form-data` file upload with a key name of `file`.
+
+**Example Response:**
+```json
+{
+  "total_messages": 3,
+  "spam_count": 2,
+  "non_spam_count": 1,
+  "spam_percentage": 66.67,
+  "results": [
+    {
+      "message": "Congratulations! You won a free prize",
+      "prediction": "spam"
+    },
+    {
+      "message": "Meeting tomorrow at 10am",
+      "prediction": "ham"
+    }
+  ]
+}
+```
+
+#### `POST /bulk-predict/export`
+Requires `multipart/form-data` file upload with a key name of `file`. Returns a downloadable CSV report file:
+```csv
+message,prediction
+Congratulations! You won a free prize,spam
+Meeting tomorrow at 10am,ham
+```
+
+---
+
 ## 🎨 Theme Customization System
 
 The frontend now includes a fully customizable theme system that allows users to personalize the application's appearance.
