@@ -1,1 +1,5 @@
 @import "tailwindcss";
+/* Confidence Level Colors */
+.text-green-500 { color: #22c55e; }
+.text-yellow-500 { color: #eab308; }
+.text-red-500 { color: #ef4444; }
