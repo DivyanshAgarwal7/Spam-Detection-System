@@ -29,6 +29,14 @@ Prediction (Spam / Ham / Offensive)
 ```
 
 ---
+## Routes
+
+Python: (http://localhost:5000 or http://127.0.0.1:5000)
+Node: (http://localhost:3000)
+Reactjs: (http://localhost:5173)
+
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 

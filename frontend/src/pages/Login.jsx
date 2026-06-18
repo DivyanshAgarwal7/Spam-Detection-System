@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { GoogleLogin } from '@react-oauth/google';
 import '../App.css';
+import SpamLogo from "/src/assets/SpamLogo.png";
 
 const Login = () => {
   const [form, setForm] = useState({ email: '', password: '' });
@@ -65,7 +66,7 @@ const Login = () => {
       <div className={`w-full max-w-md backdrop-blur-xl border rounded-3xl shadow-2xl p-8 sm:p-10 transition-all duration-500 ${
         isDark ? activeTheme.cardDark : activeTheme.card
       }`}>
-        <h2 className="text-3xl font-extrabold text-center mb-2">📩 Spam Detector</h2>
+        <h2 className="flex items-center justify-center gap-3 text-3xl font-extrabold mb-2"><img src={SpamLogo} alt="Spam Logo"  className="w-24 h-16 object-contain"></img> Spam Detector</h2>
         <p className="text-center opacity-70 mb-8 text-sm font-semibold">Sign in to your account</p>
 
         {error && (

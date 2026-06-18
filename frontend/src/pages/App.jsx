@@ -12,14 +12,18 @@ import EmailHeaderAnalyzer from "../components/EmailHeaderAnalyzer";
 import BulkSpamDetection from "../components/BulkSpamDetection";
 import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
+import { redirect } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 function SpamDetector() {
+  const navigate = useNavigate();
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
   const [confidence, setConfidence] = useState(null);
   const [loading, setLoading] = useState(false);
   const [type, setType] = useState("message");
   const [showSettings, setShowSettings] = useState(false);
+   const [darkMode, setDarkMode] = useState(false);
   const [activeTab, setActiveTab] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("provider") && params.get("code")) {
@@ -28,7 +32,12 @@ function SpamDetector() {
     return "detector";
   }); // "detector", "bulk", "insights", "authenticity", or "scanner"
   const { user, logout } = useAuth();
-
+  const handleLogout = () => {
+  logout();
+  localStorage.removeItem("user");
+  navigate("/");
+};
+ 
   const {
     themeMode,
     setThemeMode,
@@ -92,7 +101,7 @@ function SpamDetector() {
         </button>
 
         <button
-          onClick={logout}
+          onClick={handleLogout}
           className="px-4 py-2.5 rounded-xl font-bold bg-red-650 hover:bg-red-600 text-white transition-all active:scale-95 shadow-md"
         >
           Logout
