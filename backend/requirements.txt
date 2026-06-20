@@ -13,6 +13,7 @@ pytest
 shap
 lime
 flask-cors
+flask-jwt-extended
 requests>=2.31.0
 # Email authenticity verification module uses standard libraries (email, re)
 
