@@ -31,9 +31,22 @@ const Register = () => {
 
     setLoading(true);
     try {
-      await api.post(`${import.meta.env.VITE_API_URI}/api/auth/register`, form);
-      setSuccess('Account created! Redirecting to login...');
-      setTimeout(() => navigate('/'), 1500);
+      // await api.post(`${import.meta.env.VITE_API_URI}/api/auth/register`, form);
+      // setSuccess('Account created! Redirecting to login...');
+      // setTimeout(() => navigate('/'), 1500);
+      const res = await api.post(
+        `${import.meta.env.VITE_API_URI}/api/auth/register`,
+        form
+      );
+
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+
+      login(res.data.user);
+
+      setSuccess("Account created successfully! Redirecting...");
+
+      setTimeout(() => navigate("/app"), 1000);
     } catch (err) {
       setError(err.response?.data?.error || 'Registration failed. Please try again.');
     } finally {
