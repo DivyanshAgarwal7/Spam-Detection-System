@@ -5,6 +5,18 @@ dns.setServers(["8.8.8.8", "1.1.1.1"]); // ensure SRV records resolve on all net
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
+
+// Configure global request interceptor to append the internal secret API key
+axios.interceptors.request.use(
+  (config) => {
+    const internalSecret = process.env.INTERNAL_SECRET || "super-secret-internal-key";
+    config.headers["X-Internal-Secret"] = internalSecret;
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 const mongoose = require("mongoose");
 
 const History = require("./models/History");
