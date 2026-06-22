@@ -28,6 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 from gmail_connector import get_gmail_auth_url, get_gmail_tokens, refresh_gmail_token, fetch_gmail_emails
 from outlook_connector import get_outlook_auth_url, get_outlook_tokens, refresh_outlook_token, fetch_outlook_emails
 from email_scanner import scan_emails_with_model
+import imap_connector
+import imap_store
+from crypto_utils import encrypt_secret, decrypt_secret, CredentialEncryptionError
+from apscheduler.schedulers.background import BackgroundScheduler
 load_dotenv()
 
 app = Flask(__name__)
@@ -519,6 +523,186 @@ def scan_emails_route():
         return jsonify(scan_results)
     except Exception as e:
         return jsonify({"error": f"Email scan execution failed: {str(e)}"}), 500
+
+
+imap_store.init_db()
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+def _run_imap_scan(username):
+    """Runs inside the scheduler thread: fetches, classifies and persists new emails."""
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return
+    try:
+        password = decrypt_secret(conn_row["encrypted_password"])
+        emails = imap_connector.fetch_imap_emails(
+            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+        )
+        with app.app_context():
+            scan_results = scan_emails_with_model(emails)
+        imap_store.save_scan_results(username, scan_results["emails"])
+        imap_store.update_last_scan(username)
+    except Exception as e:
+        print(f"[imap-scan] scheduled scan failed for {username}: {e}")
+
+
+def _schedule_user_job(username, interval_minutes):
+    scheduler.add_job(
+        _run_imap_scan,
+        "interval",
+        minutes=interval_minutes,
+        id=f"imap_scan_{username}",
+        args=[username],
+        replace_existing=True,
+    )
+
+
+# Re-arm scheduled jobs for connections that were already active before this restart.
+for _row in imap_store.get_all_active_connections():
+    _schedule_user_job(_row["username"], _row["scan_interval_minutes"])
+
+
+def _require_username():
+    """The Node gateway authenticates the user and forwards their identity via this
+    header (it does not forward a Flask-issued JWT, so jwt_required() can't be used here).
+    """
+    username = request.headers.get("X-User-Username")
+    if not username:
+        return None
+    return username
+
+
+@app.route("/imap/connect", methods=["POST"])
+def imap_connect():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    data = request.get_json(silent=True) or {}
+
+    host = data.get("host", "").strip()
+    port = data.get("port", 993)
+    imap_username = data.get("imap_username", "").strip()
+    password = data.get("password", "")
+    scan_interval_minutes = data.get("scan_interval_minutes")
+    consent = data.get("consent", False)
+
+    if not host or not imap_username or not password:
+        return jsonify({"error": "host, imap_username and password are required"}), 400
+
+    if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
+        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+
+    if not consent:
+        return jsonify({"error": "Explicit consent is required before connecting an inbox"}), 400
+
+    try:
+        imap_connector.test_imap_connection(host, port, imap_username, password)
+    except imap_connector.ImapAuthError as e:
+        return jsonify({"error": f"Could not authenticate with the IMAP server: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Could not connect to the IMAP server: {e}"}), 502
+
+    encrypted_password = encrypt_secret(password)
+    imap_store.save_connection(username, host, port, imap_username, encrypted_password, scan_interval_minutes)
+    _schedule_user_job(username, scan_interval_minutes)
+
+    return jsonify({
+        "message": "Inbox connected. Scheduled scanning is now active.",
+        "scan_interval_minutes": scan_interval_minutes,
+    })
+
+
+@app.route("/imap/status", methods=["GET"])
+def imap_status():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"connected": False})
+
+    return jsonify({
+        "connected": True,
+        "host": conn_row["host"],
+        "imap_username": conn_row["imap_username"],
+        "scan_interval_minutes": conn_row["scan_interval_minutes"],
+        "consent_given_at": conn_row["consent_given_at"],
+        "last_scan_at": conn_row["last_scan_at"],
+    })
+
+
+@app.route("/imap/schedule", methods=["PUT"])
+def imap_schedule():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    data = request.get_json(silent=True) or {}
+    scan_interval_minutes = data.get("scan_interval_minutes")
+
+    if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
+        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    imap_store.update_schedule(username, scan_interval_minutes)
+    _schedule_user_job(username, scan_interval_minutes)
+    return jsonify({"message": "Scan schedule updated", "scan_interval_minutes": scan_interval_minutes})
+
+
+@app.route("/imap/disconnect", methods=["POST"])
+def imap_disconnect():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    job_id = f"imap_scan_{username}"
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    imap_store.delete_connection(username)
+    return jsonify({"message": "Inbox disconnected and stored credentials removed."})
+
+
+@app.route("/imap/scan-now", methods=["POST"])
+def imap_scan_now():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    try:
+        password = decrypt_secret(conn_row["encrypted_password"])
+    except CredentialEncryptionError as e:
+        return jsonify({"error": str(e)}), 500
+
+    try:
+        emails = imap_connector.fetch_imap_emails(
+            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+        )
+        scan_results = scan_emails_with_model(emails)
+        imap_store.save_scan_results(username, scan_results["emails"])
+        imap_store.update_last_scan(username)
+        return jsonify(scan_results)
+    except imap_connector.ImapAuthError as e:
+        return jsonify({"error": f"IMAP authentication failed: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Email scan execution failed: {e}"}), 500
+
+
+@app.route("/imap/scan-results", methods=["GET"])
+def imap_scan_results():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    limit = request.args.get("limit", default=100, type=int)
+    history = imap_store.get_scan_history(username, limit=limit)
+    return jsonify({"results": history})
 
 
 if __name__ == "__main__":

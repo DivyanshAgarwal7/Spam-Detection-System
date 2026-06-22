@@ -15,5 +15,8 @@ lime
 flask-cors
 flask-jwt-extended
 requests>=2.31.0
+cryptography>=42.0.0
+APScheduler>=3.10.4
 # Email authenticity verification module uses standard libraries (email, re)
+# IMAP inbox scanning (issue #186) uses the standard library imaplib/email modules
 
