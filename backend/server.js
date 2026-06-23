@@ -19,8 +19,10 @@ const app = express();
 // Connect to MongoDB Atlas
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-   seedAdminUser()
+  .then(() => {
+    console.log("✅ MongoDB connected");
+    seedAdminUser();  // ✅ Inside .then()
+  })
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 app.use(cors());
@@ -31,9 +33,17 @@ const authRoutes = require("./routes/authRoutes");
 const historyRoutes = require("./routes/historyRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const chatRoutes = require("./routes/chatRoutes");
+
+// Versioned routes (v1)
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/history", historyRoutes);
+app.use("/api/v1/analytics", analyticsRoutes);
+app.use("/api/v1/chat", chatRoutes);
+
+// Keep old routes for backward compatibility
 app.use("/api/auth", authRoutes);
 app.use("/api/history", historyRoutes);
-app.use("/analytics", analyticsRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.use("/api/chat", chatRoutes);
 
 const { protect } = require("./middleware/authMiddleware");
