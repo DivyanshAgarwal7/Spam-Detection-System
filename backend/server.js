@@ -5,6 +5,7 @@ const validateEnv = require('./utils/validateEnv');
 validateEnv(); // Validate environment variables
 dns.setServers(["8.8.8.8", "1.1.1.1"]); // ensure SRV records resolve on all networks
 const express = require("express");
+const seedAdminUser = require("./seeders/adminSeeder");
 const { getHealthStatus } = require('./utils/healthCheck');
 const cors = require("cors");
 const axios = require("axios");
@@ -34,6 +35,7 @@ const app = express();
 mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB connected"))
+   seedAdminUser()
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 app.use(cors());
