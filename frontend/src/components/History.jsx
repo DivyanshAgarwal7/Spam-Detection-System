@@ -43,9 +43,47 @@ const History = () => {
         );
     };
 
+    const handleExportCSV = () => {
+        if (history.length === 0) return;
+        
+        const headers = ["Query", "Prediction", "Date"];
+        const rows = history.map(item => {
+            const date = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+            const safeQuery = (item.query || '').replace(/"/g, '""');
+            return `"${safeQuery}","${item.prediction}","${date}"`;
+        });
+        
+        const csvContent = [headers.join(","), ...rows].join("\n");
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", "scan_history.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     return (
         <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
-            <h2>History</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h2 style={{ margin: 0 }}>History</h2>
+                <button 
+                    onClick={handleExportCSV}
+                    disabled={history.length === 0}
+                    style={{
+                        background: history.length === 0 ? '#9ca3af' : '#3b82f6',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+                        fontWeight: '600'
+                    }}
+                >
+                    Download CSV
+                </button>
+            </div>
 
             {selectedItems.length > 0 && (
                 <button
