@@ -8,7 +8,9 @@ const express = require("express");
 const seedAdminUser = require("./seeders/adminSeeder");
 const { getHealthStatus } = require('./utils/healthCheck');
 const cors = require("cors");
+const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
+const helmet = require('helmet');
 const axios = require("axios");
 
 // Configure global request interceptor to append the internal secret API key
@@ -32,16 +34,63 @@ const FormData = require("form-data");
 
 const app = express();
 
-// Connect to MongoDB Atlas
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log("✅ MongoDB connected");
-    seedAdminUser();  // ✅ Inside .then()
-  })
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+// Connect to MongoDB WITH RETRY
+const connectWithRetry = async (retries=5, delay=5000) => {
+  console.log("Attempting to connect to MongoDB...");
+  console.log('Max retries:', retries, 'Delay between retries (ms):', delay);
+
+  for(let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI);
+            console.log(`✅ MongoDB connected successfully (attempt ${attempt})`);
+            seedAdminUser();
+            return true;
+    } catch (err) {
+      console.error(`❌ MongoDB connection attempt ${attempt} failed:`, err.message);
+      
+      if (attempt === retries) {
+        console.error("Max retries reached. Exiting process.");
+        console.error("Please check your MongoDB connection string and ensure the database is accessible.");
+        console.error('1.MongoDB is running');
+        console.error('2.MongoDB URI is correct in .env file');
+        console.error('   3. Network connectivity\n');
+                process.exit(1);
+            }
+            
+            console.log(`⏳ Waiting ${delay/1000}s before retry...\n`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+};
+
+if(process.env.NODE_ENV === 'development'){
+  //Log all queries in development mode
+  mongoose.set('debug',true);
+} else {
+  // Log only slow queries in production mode
+  const originalExec = mongoose.Query.prototype.exec;
+  mongoose.Query.prototype.exec = async function() {
+    const start = Date.now();
+    const result = await originalExec.apply(this, arguments);
+    const duration = Date.now() - start;
+
+    if(duration > 100){ // Log queries taking longer than 100ms
+      console.log(`🐢 [${new Date().toISOString()}] Slow Query (${duration}ms):`);
+      console.log(`   Collection: ${this._collection.collectionName}`);
+      console.log(`   Query:`, JSON.stringify(this._conditions));
+    }
+
+    return result;
+    };
+}
+
+// Start connection with retry
+connectWithRetry();
 
 app.use(cors());
+app.use(helmet());
+app.use(compression());
+app.use(express.json());
 app.use(express.json({limit: '1mb'}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.get('/health', (req, res) => {

@@ -10,7 +10,7 @@ import ResetPassword from './pages/ResetPassword.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
 import { GoogleOAuthProvider } from '@react-oauth/google'
-
+import History from './components/History.jsx'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
@@ -26,6 +26,7 @@ createRoot(document.getElementById('root')).render(
               <Route path="/register" element={<Register />} />
               <Route path="/app" element={<App />} />
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/history" element={<History/>}/>
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/reset-password/:id/:token" element={<ResetPassword />} />
             </Routes>

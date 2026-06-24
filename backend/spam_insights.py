@@ -95,7 +95,7 @@ def load_data():
     
     # Try feedback_store.csv in backend directory
     base_dir = os.path.dirname(__file__)
-    feedback_path = os.path.join(base_dir, "feedback_store.csv")
+    feedback_path = os.path.join(base_dir, "output", "feedback_store.csv")
     if os.path.isfile(feedback_path):
         try:
             with open(feedback_path, newline="", encoding="utf-8") as f:

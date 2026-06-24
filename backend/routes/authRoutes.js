@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const { register, login, getMe, googleLogin, forgotPassword, resetPassword } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
+const {  registerLimiter, loginLimiter } = require('../middleware/rateLimiter');
 
 const registerValidation = [
   body('username').trim().isLength({ min: 3, max: 30 }).withMessage('Username must be 3–30 characters'),
@@ -15,8 +16,8 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
-router.post('/', loginValidation, login);
-router.post('/register', registerValidation, register);
+router.post('/', loginValidation,loginLimiter, login);
+router.post('/register', registerValidation,registerLimiter, register);
 router.post('/google', googleLogin);
 router.get('/me', protect, getMe);
 

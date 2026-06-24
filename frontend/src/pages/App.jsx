@@ -15,6 +15,7 @@ import BulkSpamDetection from "../components/BulkSpamDetection";
 import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
 import Chatbot from "../components/Chatbot";
+import Footer from "../components/Footer";
 import { redirect } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
 
@@ -108,7 +109,7 @@ function SpamDetector() {
 
   return (
     <div
-      className={`min-h-screen flex items-center justify-center px-4 py-8 pb-32 transition-all duration-500 ${
+      className={`min-h-screen flex flex-col items-center px-4 py-8 pb-32 transition-all duration-500 ${
         isDark ? activeTheme.dark : activeTheme.light
       }`}
     >
@@ -235,6 +236,7 @@ function SpamDetector() {
       )}
 
       {/* Main card */}
+      <div className="flex-1 flex items-center justify-center w-full">
       <div
         className={`w-full max-w-lg backdrop-blur-xl border rounded-3xl shadow-2xl p-6 sm:p-8 text-center transition-all duration-500 ${
           isDark
@@ -539,8 +541,11 @@ function SpamDetector() {
           <WordCloud darkMode={isDark} />
         </div>
       </div>
-      <Chatbot />
+      </div>
+    <Footer />
+    <Chatbot />
     </div>
+    
   );
 }
 

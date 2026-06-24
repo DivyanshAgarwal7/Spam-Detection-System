@@ -1,116 +1,106 @@
-import { useEffect, useState } from "react";
-import api from "../utils/axiosInstance";
+import { useState, useEffect } from 'react';
+import axios from 'axios';
 
-function History({ darkMode }) {
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+const History = () => {
+    const [history, setHistory] = useState([]);
+    const [selectedItems, setSelectedItems] = useState([]);
 
-  const fetchHistory = async () => {
-    try {
-      const res = await api.get("/api/history");
-      setHistory(res.data);
-    } catch (err) {
-      console.error("Failed to load history:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const fetchHistory = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.get('/api/history', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setHistory(res.data.data || []);
+        } catch (error) {
+            console.error('Error fetching history:', error);
+        }
+    };
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
+    useEffect(() => {
+        fetchHistory();
+    }, []);
 
-  const deleteItem = async (id) => {
-    try {
-      await api.delete(`/api/history/${id}`);
+    const handleBulkDelete = async () => {
+        if (!confirm(`Delete ${selectedItems.length} item(s)?`)) return;
 
-      setHistory((prev) =>
-        prev.filter((item) => item._id !== id)
-      );
-    } catch (err) {
-      console.error(err);
-    }
-  };
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete('/api/history/bulk-delete', {
+                headers: { Authorization: `Bearer ${token}` },
+                data: { ids: selectedItems }
+            });
+            setSelectedItems([]);
+            fetchHistory();
+        } catch (error) {
+            alert('Failed to delete items');
+        }
+    };
 
-  const clearAll = async () => {
-    try {
-      await api.delete("/api/history");
+    const toggleSelect = (id) => {
+        setSelectedItems(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
 
-      setHistory([]);
-    } catch (err) {
-      console.error(err);
-    }
-  };
+    return (
+        <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
+            <h2>History</h2>
 
-  if (loading) {
-    return <p>Loading history...</p>;
-  }
+            {selectedItems.length > 0 && (
+                <button
+                    onClick={handleBulkDelete}
+                    style={{
+                        background: '#ef4444',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        marginBottom: '10px'
+                    }}
+                >
+                    Delete Selected ({selectedItems.length})
+                </button>
+            )}
 
-  return (
-    <div className="mt-6">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">
-          📜 History
-        </h2>
-
-        {history.length > 0 && (
-          <button
-            onClick={clearAll}
-            className="bg-red-500 text-white px-3 py-1 rounded-lg"
-          >
-            Clear All
-          </button>
-        )}
-      </div>
-
-      {history.length === 0 ? (
-        <p>No history found.</p>
-      ) : (
-        <div className="space-y-3">
-          {history.map((item) => (
-            <div
-              key={item._id}
-              className={`p-3 rounded-xl border ${
-                darkMode
-                  ? "bg-gray-800 border-gray-700"
-                  : "bg-white/40 border-gray-300"
-              }`}
-            >
-              <p className="font-medium">
-                {item.query}
-              </p>
-
-              <p>
-                Result:{" "}
-                <span className="font-semibold">
-                  {item.prediction}
-                </span>
-              </p>
-
-              <p>
-                Type: {item.type}
-              </p>
-
-              <p className="text-sm opacity-70">
-                {new Date(
-                  item.createdAt
-                ).toLocaleString()}
-              </p>
-
-              <button
-                onClick={() =>
-                  deleteItem(item._id)
-                }
-                className="mt-2 bg-red-500 text-white px-2 py-1 rounded"
-              >
-                Delete
-              </button>
-            </div>
-          ))}
+            {history.length === 0 ? (
+                <p>No history found.</p>
+            ) : (
+                history.map(item => (
+                    <div
+                        key={item._id}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '10px 0',
+                            borderBottom: '1px solid #e5e7eb'
+                        }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={selectedItems.includes(item._id)}
+                            onChange={() => toggleSelect(item._id)}
+                        />
+                        <span style={{ flex: 1 }}>{item.query}</span>
+                        <span
+                            style={{
+                                padding: '2px 10px',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                background: item.prediction === 'spam' ? '#fee2e2' : '#dcfce7',
+                                color: item.prediction === 'spam' ? '#dc2626' : '#16a34a'
+                            }}
+                        >
+                            {item.prediction}
+                        </span>
+                    </div>
+                ))
+            )}
         </div>
-      )}
-    </div>
-  );
-}
+    );
+};
 
 export default History;

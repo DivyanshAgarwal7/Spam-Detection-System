@@ -24,6 +24,10 @@ router.post("/", async (req, res) => {
             return res.status(400).json({ error: "Message is required." });
         }
 
+        if (message.length > 1000) {
+            return res.status(400).json({ error: "Message exceeds maximum length of 1000 characters." });
+        }
+
         // Format the history for Groq
         const messages = [
             { role: "system", content: SYSTEM_PROMPT }

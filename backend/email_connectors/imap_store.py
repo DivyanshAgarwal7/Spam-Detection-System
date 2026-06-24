@@ -115,8 +115,25 @@ def delete_connection(username):
 
 
 def save_scan_results(username, scanned_emails):
+    if not scanned_emails:
+        return
     now = datetime.now(timezone.utc).isoformat()
     with _connection() as conn:
+        # Fetch existing message IDs to deduplicate
+        message_ids = [e.get("id") for e in scanned_emails if e.get("id")]
+        existing = set()
+        if message_ids:
+            placeholders = ",".join(["?"] * len(message_ids))
+            cursor = conn.execute(
+                f"SELECT message_id FROM imap_scan_results WHERE username = ? AND message_id IN ({placeholders})",
+                [username] + message_ids
+            )
+            existing = {row["message_id"] for row in cursor.fetchall()}
+            
+        new_emails = [e for e in scanned_emails if e.get("id") not in existing]
+        if not new_emails:
+            return
+
         conn.executemany(
             """
             INSERT INTO imap_scan_results
@@ -135,21 +152,21 @@ def save_scan_results(username, scanned_emails):
                     e.get("trust_level"),
                     now,
                 )
-                for e in scanned_emails
+                for e in new_emails
             ],
         )
         conn.commit()
 
 
-def get_scan_history(username, limit=100):
+def get_scan_history(username, limit=100, offset=0):
     with _connection() as conn:
         rows = conn.execute(
             """
             SELECT * FROM imap_scan_results
             WHERE username = ?
             ORDER BY scanned_at DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (username, limit),
+            (username, limit, offset),
         ).fetchall()
         return [dict(row) for row in rows]
