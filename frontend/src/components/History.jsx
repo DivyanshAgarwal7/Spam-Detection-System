@@ -43,9 +43,40 @@ const History = () => {
         );
     };
 
+    const handleClearAll = async () => {
+        if (!confirm('Are you sure you want to permanently delete ALL history?')) return;
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete('/api/history', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setSelectedItems([]);
+            fetchHistory();
+        } catch (error) {
+            alert('Failed to clear history');
+        }
+    };
+
     return (
         <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
-            <h2>History</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h2 style={{ margin: 0 }}>History</h2>
+                <button 
+                    onClick={handleClearAll}
+                    disabled={history.length === 0}
+                    style={{
+                        background: history.length === 0 ? '#fca5a5' : '#ef4444',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+                        fontWeight: '600'
+                    }}
+                >
+                    Clear All
+                </button>
+            </div>
 
             {selectedItems.length > 0 && (
                 <button
