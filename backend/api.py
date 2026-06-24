@@ -204,10 +204,8 @@ def predict():
                 prob = 1.0 / (1.0 + np.exp(-score))
                 confidence = round(prob * 100, 2)
         except Exception:
-            # Fallback: use a random confidence for demo (or from model)
-            # In production, use actual confidence from your model
-            import random
-            confidence = round(random.uniform(65, 99), 2)
+            # Fallback: safely set confidence to 0 when prediction probability fails
+            confidence = 0.0
         
         # ─── DETERMINE CONFIDENCE LEVEL ───────────────────────────────
         if confidence >= 80:
