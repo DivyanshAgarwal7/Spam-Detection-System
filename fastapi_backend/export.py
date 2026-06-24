@@ -3,7 +3,7 @@ import io
 from fpdf import FPDF
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from backend.database import get_connection
+from fastapi_backend.database import get_connection
 
 router = APIRouter(prefix="/api/emails", tags=["export"])
 

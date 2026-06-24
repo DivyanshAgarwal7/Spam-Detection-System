@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spam Detection Scanner</title>
+  <style>
+    body { font-family: system-ui, sans-serif; width: 260px; padding: 14px; }
+    h3 { margin: 0 0 8px; font-size: 14px; }
+    p { font-size: 12px; margin: 4px 0; }
+    button { width: 100%; padding: 8px; margin-top: 8px; cursor: pointer; }
+    .ok { color: #1e7e34; }
+    .warn { color: #c0392b; }
+  </style>
+</head>
+<body>
+  <h3>Spam Detection Scanner</h3>
+  <p id="status">Checking configuration…</p>
+  <button id="rescan">Rescan visible messages</button>
+  <button id="openOptions">Open settings</button>
+  <script src="popup.js"></script>
+</body>
+</html>

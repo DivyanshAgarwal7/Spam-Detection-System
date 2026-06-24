@@ -8,11 +8,26 @@ export default function EmailScannerDashboard() {
   // Connection states
   const [gmailConnected, setGmailConnected] = useState(null); // null (checking), true, false
   const [outlookConnected, setOutlookConnected] = useState(null);
+  const [imapStatus, setImapStatus] = useState(null); // null (checking) or { connected, host, imap_username, scan_interval_minutes, last_scan_at }
 
   // Loading states
   const [loadingGmail, setLoadingGmail] = useState(false);
   const [loadingOutlook, setLoadingOutlook] = useState(false);
   const [scanning, setScanning] = useState(false);
+
+  // IMAP connect modal state
+  const [showImapModal, setShowImapModal] = useState(false);
+  const [imapForm, setImapForm] = useState({
+    host: "",
+    port: 993,
+    imap_username: "",
+    password: "",
+    scan_interval_minutes: 30,
+  });
+  const [imapConsent, setImapConsent] = useState(false);
+  const [connectingImap, setConnectingImap] = useState(false);
+  const [disconnectingImap, setDisconnectingImap] = useState(false);
+  const [imapError, setImapError] = useState("");
 
   // Result and UI states
   const [activeProvider, setActiveProvider] = useState(null); // 'gmail' or 'outlook'
@@ -25,6 +40,7 @@ export default function EmailScannerDashboard() {
   useEffect(() => {
     checkConnectionStatus();
     handleOAuthCallback();
+    refreshImapStatus();
   }, []);
 
   const checkConnectionStatus = async () => {
@@ -42,6 +58,15 @@ export default function EmailScannerDashboard() {
       setOutlookConnected(true);
     } catch (err) {
       setOutlookConnected(false);
+    }
+  };
+
+  const refreshImapStatus = async () => {
+    try {
+      const res = await api.get("/imap/status");
+      setImapStatus(res.data);
+    } catch {
+      setImapStatus({ connected: false });
     }
   };
 
@@ -115,6 +140,90 @@ export default function EmailScannerDashboard() {
     }
   };
 
+  const handleImapFormChange = (field, value) => {
+    setImapForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleImapConnect = async (e) => {
+    e.preventDefault();
+    setImapError("");
+
+    if (!imapConsent) {
+      setImapError("You must accept the privacy disclosure before connecting your inbox.");
+      return;
+    }
+
+    setConnectingImap(true);
+    try {
+      await api.post("/imap/connect", {
+        host: imapForm.host.trim(),
+        port: Number(imapForm.port) || 993,
+        imap_username: imapForm.imap_username.trim(),
+        password: imapForm.password,
+        scan_interval_minutes: Number(imapForm.scan_interval_minutes),
+        consent: true,
+      });
+      setShowImapModal(false);
+      setImapForm((prev) => ({ ...prev, password: "" }));
+      setImapConsent(false);
+      setSuccessMsg("Inbox connected. Scheduled scanning is now active.");
+      await refreshImapStatus();
+      handleImapScanNow();
+    } catch (err) {
+      setImapError(err.response?.data?.error || "Failed to connect inbox.");
+    } finally {
+      setConnectingImap(false);
+    }
+  };
+
+  const handleImapScheduleChange = async (minutes) => {
+    setImapError("");
+    try {
+      await api.put("/imap/schedule", { scan_interval_minutes: Number(minutes) });
+      await refreshImapStatus();
+    } catch (err) {
+      setImapError(err.response?.data?.error || "Failed to update scan schedule.");
+    }
+  };
+
+  const handleImapScanNow = async () => {
+    setScanning(true);
+    setError("");
+    setSuccessMsg("");
+    setScanResults(null);
+    setExpandedEmailId(null);
+    setActiveProvider("imap");
+
+    try {
+      const res = await api.post("/imap/scan-now");
+      setScanResults(res.data);
+      setSuccessMsg(`Successfully scanned ${res.data.total_scanned} emails from your IMAP inbox!`);
+      await refreshImapStatus();
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to scan IMAP inbox.");
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleImapDisconnect = async () => {
+    setDisconnectingImap(true);
+    setImapError("");
+    try {
+      await api.post("/imap/disconnect");
+      setImapStatus({ connected: false });
+      setSuccessMsg("Inbox disconnected. Stored credentials were removed.");
+      if (activeProvider === "imap") {
+        setScanResults(null);
+        setActiveProvider(null);
+      }
+    } catch (err) {
+      setImapError(err.response?.data?.error || "Failed to disconnect inbox.");
+    } finally {
+      setDisconnectingImap(false);
+    }
+  };
+
   const toggleExpandEmail = (id) => {
     setExpandedEmailId(expandedEmailId === id ? null : id);
   };
@@ -142,7 +251,7 @@ export default function EmailScannerDashboard() {
       </p>
 
       {/* Connection Status Section */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Gmail Card */}
         <div className={`p-5 rounded-2xl border transition-all duration-300 ${
           isDark ? "bg-slate-900/40 border-slate-800" : "bg-white/45 border-slate-200"
@@ -254,7 +363,189 @@ export default function EmailScannerDashboard() {
             )}
           </div>
         </div>
+        {/* IMAP Card */}
+        <div className={`p-5 rounded-2xl border transition-all duration-300 ${
+          isDark ? "bg-slate-900/40 border-slate-800" : "bg-white/45 border-slate-200"
+        } flex flex-col justify-between`}>
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-2xl">📥</span>
+              <span className={`text-[10px] font-extrabold uppercase px-2.5 py-1 rounded-full border ${
+                imapStatus?.connected === true
+                  ? "text-green-600 bg-green-500/10 border-green-500/20"
+                  : imapStatus?.connected === false
+                  ? "text-slate-500 bg-slate-500/10 border-slate-500/20"
+                  : "text-blue-500 bg-blue-500/10 border-blue-500/20 animate-pulse"
+              }`}>
+                {imapStatus?.connected === true ? "Connected" : imapStatus?.connected === false ? "Disconnected" : "Checking..."}
+              </span>
+            </div>
+            <h3 className="text-base font-bold mb-1">IMAP Inbox</h3>
+            <p className="text-[11px] opacity-70 mb-2 font-medium leading-relaxed">
+              Read-only IMAP access with scheduled scanning every {imapStatus?.scan_interval_minutes || 30} min.
+            </p>
+            {imapStatus?.connected && (
+              <p className="text-[10px] opacity-50 mb-2 font-semibold truncate">
+                {imapStatus.imap_username} · last scan{" "}
+                {imapStatus.last_scan_at ? new Date(imapStatus.last_scan_at).toLocaleString() : "never"}
+              </p>
+            )}
+          </div>
+
+          {imapStatus?.connected ? (
+            <div className="flex flex-col gap-2">
+              <select
+                value={imapStatus.scan_interval_minutes}
+                onChange={(e) => handleImapScheduleChange(e.target.value)}
+                className={`text-[11px] font-bold rounded-xl px-2 py-2 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              >
+                <option value={15}>Scan every 15 min</option>
+                <option value={30}>Scan every 30 min</option>
+                <option value={60}>Scan every 60 min</option>
+              </select>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleImapScanNow}
+                  disabled={scanning}
+                  className={`flex-grow py-2.5 rounded-xl font-bold text-xs text-white shadow-md active:scale-95 transition-all ${activeTheme.accent}`}
+                >
+                  {scanning && activeProvider === "imap" ? "Scanning..." : "Scan Now"}
+                </button>
+                <button
+                  onClick={handleImapDisconnect}
+                  disabled={disconnectingImap}
+                  className="px-3 py-2.5 rounded-xl font-bold text-xs border border-red-500/30 text-red-600 dark:text-red-400 transition-all"
+                  title="Disconnect and delete stored credentials"
+                >
+                  {disconnectingImap ? "..." : "Disconnect"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowImapModal(true)}
+              disabled={imapStatus === null}
+              className={`w-full py-2.5 rounded-xl font-bold text-xs text-white shadow-md active:scale-95 transition-all bg-purple-600 hover:bg-purple-750`}
+            >
+              Connect Inbox
+            </button>
+          )}
+          {imapError && !showImapModal && (
+            <p className="text-[10px] text-red-500 font-semibold mt-2">{imapError}</p>
+          )}
+        </div>
       </div>
+
+      {/* IMAP connect modal: privacy disclosure + consent + credentials form */}
+      {showImapModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className={`w-full max-w-md rounded-2xl border p-6 ${
+            isDark ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"
+          }`}>
+            <h3 className="text-base font-bold mb-2">Connect IMAP Inbox</h3>
+            <div className={`p-3 mb-4 rounded-xl text-[11px] leading-relaxed font-medium ${
+              isDark ? "bg-slate-950/60 text-slate-300" : "bg-slate-100 text-slate-700"
+            }`}>
+              We request read-only IMAP access to scan incoming mail for spam. Your
+              credentials are encrypted before being stored and are never shared with
+              third parties. You can disconnect and permanently delete them at any time.
+            </div>
+
+            <form onSubmit={handleImapConnect} className="flex flex-col gap-3">
+              <input
+                type="text"
+                required
+                placeholder="IMAP host (e.g. imap.gmail.com)"
+                value={imapForm.host}
+                onChange={(e) => handleImapFormChange("host", e.target.value)}
+                className={`text-xs font-semibold rounded-xl px-3 py-2.5 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              />
+              <input
+                type="number"
+                required
+                placeholder="Port"
+                value={imapForm.port}
+                onChange={(e) => handleImapFormChange("port", e.target.value)}
+                className={`text-xs font-semibold rounded-xl px-3 py-2.5 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              />
+              <input
+                type="email"
+                required
+                placeholder="Email address"
+                value={imapForm.imap_username}
+                onChange={(e) => handleImapFormChange("imap_username", e.target.value)}
+                className={`text-xs font-semibold rounded-xl px-3 py-2.5 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              />
+              <input
+                type="password"
+                required
+                placeholder="App password"
+                value={imapForm.password}
+                onChange={(e) => handleImapFormChange("password", e.target.value)}
+                className={`text-xs font-semibold rounded-xl px-3 py-2.5 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              />
+              <select
+                value={imapForm.scan_interval_minutes}
+                onChange={(e) => handleImapFormChange("scan_interval_minutes", e.target.value)}
+                className={`text-xs font-semibold rounded-xl px-3 py-2.5 border ${
+                  isDark ? "bg-slate-950 border-slate-800" : "bg-white border-slate-200"
+                }`}
+              >
+                <option value={15}>Scan every 15 minutes</option>
+                <option value={30}>Scan every 30 minutes</option>
+                <option value={60}>Scan every 60 minutes</option>
+              </select>
+
+              <label className="flex items-start gap-2 text-[11px] font-semibold mt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={imapConsent}
+                  onChange={(e) => setImapConsent(e.target.checked)}
+                  className="mt-0.5"
+                />
+                I consent to read-only access to this inbox for spam scanning, and
+                understand I can revoke it at any time.
+              </label>
+
+              {imapError && (
+                <p className="text-[11px] text-red-500 font-semibold">{imapError}</p>
+              )}
+
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="submit"
+                  disabled={connectingImap}
+                  className={`flex-grow py-2.5 rounded-xl font-bold text-xs text-white shadow-md active:scale-95 transition-all ${activeTheme.accent}`}
+                >
+                  {connectingImap ? "Connecting..." : "Connect"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowImapModal(false);
+                    setImapError("");
+                  }}
+                  className={`px-4 py-2.5 rounded-xl font-bold text-xs border transition-all ${
+                    isDark ? activeTheme.btnSecondaryDark : activeTheme.btnSecondary
+                  }`}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       {error && (

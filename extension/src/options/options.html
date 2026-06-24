@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spam Detection Scanner — Settings</title>
+  <style>
+    body { font-family: system-ui, sans-serif; width: 380px; padding: 16px; }
+    label { display: block; font-size: 12px; font-weight: 600; margin-top: 12px; }
+    input { width: 100%; padding: 6px 8px; margin-top: 4px; box-sizing: border-box; }
+    button { margin-top: 16px; padding: 8px 14px; cursor: pointer; }
+    p.hint { font-size: 11px; color: #666; margin-top: 4px; }
+    #status { margin-top: 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h2>Spam Detection Scanner</h2>
+  <p class="hint">
+    If you're running the web app locally at <code>localhost:5173</code>, just
+    log in there — your token is picked up automatically within a few seconds.
+    Otherwise, open devtools console on the web app's page and run
+    <code>localStorage.getItem('token')</code>, then paste the result below.
+  </p>
+
+  <label for="apiBaseUrl">API base URL</label>
+  <input id="apiBaseUrl" type="text" placeholder="http://localhost:3000" />
+
+  <label for="authToken">Account token</label>
+  <input id="authToken" type="password" placeholder="Paste your login token" />
+
+  <button id="save">Save</button>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

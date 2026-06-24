@@ -153,3 +153,14 @@ class TestEmailHeaderAnalyzer:
         assert data["success"] is True
         assert data["trust_level"] == "Trusted"
         assert data["risk_score"] == 0
+
+    def test_api_endpoint_multipart_eml_non_utf8(self, client):
+        headers_non_utf8 = LEGIT_HEADERS + "X-Custom: ñ\n"
+        data = {
+            "file": (io.BytesIO(headers_non_utf8.encode("latin-1")), "latin1.eml")
+        }
+        response = client.post("/analyze-email-header", data=data, content_type="multipart/form-data")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["success"] is True
+        assert data["trust_level"] == "Trusted"

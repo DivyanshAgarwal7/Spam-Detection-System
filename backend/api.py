@@ -28,21 +28,67 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 from gmail_connector import get_gmail_auth_url, get_gmail_tokens, refresh_gmail_token, fetch_gmail_emails
 from outlook_connector import get_outlook_auth_url, get_outlook_tokens, refresh_outlook_token, fetch_outlook_emails
 from email_scanner import scan_emails_with_model
+import imap_connector
+import imap_store
+from crypto_utils import encrypt_secret, decrypt_secret, CredentialEncryptionError
+from apscheduler.schedulers.background import BackgroundScheduler
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*" }})
 
-from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
+from functools import wraps
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, verify_jwt_in_request
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "super-secret")
 jwt = JWTManager(app)
 
-MODEL_PATH = os.getenv("MODEL_PATH", "linear_svm_model.pkl")
-VECTORIZER_PATH = os.getenv("VECTORIZER_PATH", "tfidf_vectorizer.pkl")
-LABEL_ENCODER_PATH = os.getenv("LABEL_ENCODER_PATH", "label_encoder.pkl")
+def jwt_or_secret_required():
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            secret = request.headers.get("X-Internal-Secret")
+            expected_secret = os.getenv("INTERNAL_SECRET", "super-secret-internal-key")
+            if secret and secret == expected_secret:
+                return fn(*args, **kwargs)
+            verify_jwt_in_request()
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
-if not MODEL_PATH or not VECTORIZER_PATH or not LABEL_ENCODER_PATH:
-    raise ValueError("Required environment variables are missing")
+def get_current_user_identity():
+    secret = request.headers.get("X-Internal-Secret")
+    expected_secret = os.getenv("INTERNAL_SECRET", "super-secret-internal-key")
+    if secret and secret == expected_secret:
+        return request.headers.get("X-User-Username")
+    try:
+        return get_jwt_identity()
+    except Exception:
+        return None
+
+BASE_DIR = Path(__file__).resolve().parent
+
+def resolve_path(env_var, default_filename):
+    val = os.getenv(env_var)
+    if val:
+        p = Path(val)
+        if p.is_absolute():
+            return val
+        if p.exists() and p.stat().st_size > 0:
+            return val
+        p_base = BASE_DIR / p
+        if p_base.exists() and p_base.stat().st_size > 0:
+            return str(p_base)
+        p_name = BASE_DIR / p.name
+        if p_name.exists() and p_name.stat().st_size > 0:
+            return str(p_name)
+        return val
+    return str(BASE_DIR / default_filename)
+
+MODEL_PATH = resolve_path("MODEL_PATH", "linear_svm_model.pkl")
+VECTORIZER_PATH = resolve_path("VECTORIZER_PATH", "tfidf_vectorizer.pkl")
+LABEL_ENCODER_PATH = resolve_path("LABEL_ENCODER_PATH", "label_encoder.pkl")
+URL_MODEL_PATH = resolve_path("URL_MODEL_PATH", "url_detector.pkl")
+URL_VECTORIZER_PATH = resolve_path("URL_VECTORIZER_PATH", "url_vectorizer.pkl")
 
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
@@ -60,16 +106,7 @@ app.label_encoder = label_encoder
 
 from bulk_predict import bulk_predict_bp
 app.register_blueprint(bulk_predict_bp)
-BASE_DIR = Path(__file__).resolve().parent
-URL_MODEL_PATH = os.getenv(
-    "URL_MODEL_PATH",
-    str(BASE_DIR / "url_detector.pkl")
-)
 
-URL_VECTORIZER_PATH = os.getenv(
-    "URL_VECTORIZER_PATH",
-    str(BASE_DIR / "url_vectorizer.pkl")
-)
 url_model = joblib.load(URL_MODEL_PATH)
 url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
 # url_detector.pkl predicts numeric classes with no bundled label encoder
@@ -148,13 +185,24 @@ def predict():
 
          # ─── GET CONFIDENCE SCORE ──────────────────────────────────────
         # Get probability/confidence from model
-        confidence=0.95 #default fallback 
+        confidence = 95.0 #default fallback percentage
         try:
+            active_model = url_model if input_type == "url" else model
             # If model has predict_proba
-            if hasattr(model, 'predict_proba'):
-                proba = model.predict_proba(text_vector)
+            if hasattr(active_model, 'predict_proba'):
+                proba = active_model.predict_proba(text_vector)
                 confidence = round(max(proba[0]) * 100, 2)
-        except:
+            elif hasattr(active_model, 'decision_function'):
+                import numpy as np
+                decision = active_model.decision_function(text_vector)
+                if isinstance(decision, np.ndarray):
+                    score = float(np.max(np.abs(decision)))
+                else:
+                    score = float(abs(decision))
+                # Sigmoid mapping to pseudo-probability percentage
+                prob = 1.0 / (1.0 + np.exp(-score))
+                confidence = round(prob * 100, 2)
+        except Exception:
             # Fallback: use a random confidence for demo (or from model)
             # In production, use actual confidence from your model
             import random
@@ -330,7 +378,11 @@ def analyze_email_header():
             file = request.files["file"]
             if file and file.filename != "":
                 try:
-                    headers = file.read().decode("utf-8")
+                    raw_bytes = file.read()
+                    try:
+                        headers = raw_bytes.decode("utf-8")
+                    except UnicodeDecodeError:
+                        headers = raw_bytes.decode("latin-1", errors="replace")
                 except Exception as e:
                     return jsonify({"error": f"Failed to read EML file: {str(e)}"}), 400
             else:
@@ -377,11 +429,12 @@ def gmail_auth_url():
     return jsonify({"auth_url": url})
 
 @app.route("/gmail/callback", methods=["GET"])
-@jwt_required()
 def gmail_callback():
     code = request.args.get("code")
     redirect_uri = request.args.get("redirect_uri") or "http://localhost:3000/gmail/callback"
-    username = get_jwt_identity()
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
     
     if not code:
         return jsonify({"error": "Authorization code is missing"}), 400
@@ -396,9 +449,10 @@ def gmail_callback():
         return jsonify({"error": f"Failed to exchange Google code: {str(e)}"}), 500
 
 @app.route("/gmail/emails", methods=["GET"])
-@jwt_required()
 def gmail_emails():
-    username = get_jwt_identity()
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
     user_tokens = TOKEN_STORE.get(username, {}).get("gmail")
     
     if not user_tokens:
@@ -427,11 +481,12 @@ def outlook_auth_url():
     return jsonify({"auth_url": url})
 
 @app.route("/outlook/callback", methods=["GET"])
-@jwt_required()
 def outlook_callback():
     code = request.args.get("code")
     redirect_uri = request.args.get("redirect_uri") or "http://localhost:3000/outlook/callback"
-    username = get_jwt_identity()
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
     
     if not code:
         return jsonify({"error": "Authorization code is missing"}), 400
@@ -446,9 +501,10 @@ def outlook_callback():
         return jsonify({"error": f"Failed to exchange Outlook code: {str(e)}"}), 500
 
 @app.route("/outlook/emails", methods=["GET"])
-@jwt_required()
 def outlook_emails():
-    username = get_jwt_identity()
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
     user_tokens = TOKEN_STORE.get(username, {}).get("outlook")
     
     if not user_tokens:
@@ -471,11 +527,12 @@ def outlook_emails():
         return jsonify({"error": f"Failed to fetch Outlook emails: {str(e)}"}), 500
 
 @app.route("/scan-emails", methods=["POST"])
-@jwt_required()
 def scan_emails_route():
     data = request.get_json(silent=True) or {}
     provider = data.get("provider", "").lower()
-    username = get_jwt_identity()
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
     
     if provider not in ("gmail", "outlook"):
         return jsonify({"error": "Invalid provider. Must be 'gmail' or 'outlook'."}), 400
@@ -510,6 +567,190 @@ def scan_emails_route():
         return jsonify(scan_results)
     except Exception as e:
         return jsonify({"error": f"Email scan execution failed: {str(e)}"}), 500
+
+
+imap_store.init_db()
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+def _run_imap_scan(username):
+    """Runs inside the scheduler thread: fetches, classifies and persists new emails."""
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return
+    try:
+        password = decrypt_secret(conn_row["encrypted_password"])
+        emails = imap_connector.fetch_imap_emails(
+            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+        )
+        with app.app_context():
+            scan_results = scan_emails_with_model(emails)
+        imap_store.save_scan_results(username, scan_results["emails"])
+        imap_store.update_last_scan(username)
+    except Exception as e:
+        print(f"[imap-scan] scheduled scan failed for {username}: {e}")
+
+
+def _schedule_user_job(username, interval_minutes):
+    scheduler.add_job(
+        _run_imap_scan,
+        "interval",
+        minutes=interval_minutes,
+        id=f"imap_scan_{username}",
+        args=[username],
+        replace_existing=True,
+    )
+
+
+# Re-arm scheduled jobs for connections that were already active before this restart.
+for _row in imap_store.get_all_active_connections():
+    _schedule_user_job(_row["username"], _row["scan_interval_minutes"])
+
+
+def _require_username():
+    """The Node gateway authenticates the user and forwards their identity via this
+    header. We also verify the internal secret for security.
+    """
+    secret = request.headers.get("X-Internal-Secret")
+    expected_secret = os.getenv("INTERNAL_SECRET", "super-secret-internal-key")
+    if not secret or secret != expected_secret:
+        return None
+    username = request.headers.get("X-User-Username")
+    if not username:
+        return None
+    return username
+
+
+@app.route("/imap/connect", methods=["POST"])
+def imap_connect():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    data = request.get_json(silent=True) or {}
+
+    host = data.get("host", "").strip()
+    port = data.get("port", 993)
+    imap_username = data.get("imap_username", "").strip()
+    password = data.get("password", "")
+    scan_interval_minutes = data.get("scan_interval_minutes")
+    consent = data.get("consent", False)
+
+    if not host or not imap_username or not password:
+        return jsonify({"error": "host, imap_username and password are required"}), 400
+
+    if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
+        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+
+    if not consent:
+        return jsonify({"error": "Explicit consent is required before connecting an inbox"}), 400
+
+    try:
+        imap_connector.test_imap_connection(host, port, imap_username, password)
+    except imap_connector.ImapAuthError as e:
+        return jsonify({"error": f"Could not authenticate with the IMAP server: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Could not connect to the IMAP server: {e}"}), 502
+
+    encrypted_password = encrypt_secret(password)
+    imap_store.save_connection(username, host, port, imap_username, encrypted_password, scan_interval_minutes)
+    _schedule_user_job(username, scan_interval_minutes)
+
+    return jsonify({
+        "message": "Inbox connected. Scheduled scanning is now active.",
+        "scan_interval_minutes": scan_interval_minutes,
+    })
+
+
+@app.route("/imap/status", methods=["GET"])
+def imap_status():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"connected": False})
+
+    return jsonify({
+        "connected": True,
+        "host": conn_row["host"],
+        "imap_username": conn_row["imap_username"],
+        "scan_interval_minutes": conn_row["scan_interval_minutes"],
+        "consent_given_at": conn_row["consent_given_at"],
+        "last_scan_at": conn_row["last_scan_at"],
+    })
+
+
+@app.route("/imap/schedule", methods=["PUT"])
+def imap_schedule():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    data = request.get_json(silent=True) or {}
+    scan_interval_minutes = data.get("scan_interval_minutes")
+
+    if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
+        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    imap_store.update_schedule(username, scan_interval_minutes)
+    _schedule_user_job(username, scan_interval_minutes)
+    return jsonify({"message": "Scan schedule updated", "scan_interval_minutes": scan_interval_minutes})
+
+
+@app.route("/imap/disconnect", methods=["POST"])
+def imap_disconnect():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    job_id = f"imap_scan_{username}"
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    imap_store.delete_connection(username)
+    return jsonify({"message": "Inbox disconnected and stored credentials removed."})
+
+
+@app.route("/imap/scan-now", methods=["POST"])
+def imap_scan_now():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    try:
+        password = decrypt_secret(conn_row["encrypted_password"])
+    except CredentialEncryptionError as e:
+        return jsonify({"error": str(e)}), 500
+
+    try:
+        emails = imap_connector.fetch_imap_emails(
+            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+        )
+        scan_results = scan_emails_with_model(emails)
+        imap_store.save_scan_results(username, scan_results["emails"])
+        imap_store.update_last_scan(username)
+        return jsonify(scan_results)
+    except imap_connector.ImapAuthError as e:
+        return jsonify({"error": f"IMAP authentication failed: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Email scan execution failed: {e}"}), 500
+
+
+@app.route("/imap/scan-results", methods=["GET"])
+def imap_scan_results():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    limit = request.args.get("limit", default=100, type=int)
+    history = imap_store.get_scan_history(username, limit=limit)
+    return jsonify({"results": history})
 
 
 if __name__ == "__main__":
