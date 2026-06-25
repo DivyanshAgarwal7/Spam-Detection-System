@@ -34,6 +34,23 @@ const FormData = require("form-data");
 
 const app = express();
 
+const Sentry = require("@sentry/node");
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || "development",
+  tracesSampleRate: 1.0,
+  integrations: [
+    new Sentry.Integrations.Http({ tracing: true }),
+  ],
+});
+
+// Request handler - adds tracing context
+app.use(Sentry.Handlers.requestHandler());
+
+//Tracing handler - creates a trace for every incoming request
+app.use(Sentry.Handlers.tracingHandler());
+
 // Connect to MongoDB WITH RETRY
 const connectWithRetry = async (retries=5, delay=5000) => {
   console.log("Attempting to connect to MongoDB...");
@@ -297,10 +314,23 @@ app.post("/feedback", protect, async (req, res) => {
 
     res.status(response.status).json(response.data);
   } catch (error) {
+    // Capture error in Sentry with context
+    Sentry.captureException(error, {
+      tags: {
+        endpoint: '/feedback',
+        userId: req.user?.id || 'anonymous'
+      },
+      extra: {
+        text: text?.substring(0, 100), // Truncate for privacy
+        predicted_label,
+        correct_label
+      }
+    });
+
     if (error.response) {
       return res.status(error.response.status).json(error.response.data);
     }
-    console.error(error.message);
+    console.error(`[${req.requestId}] Feedback error:`, error.message);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
