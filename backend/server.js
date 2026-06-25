@@ -127,6 +127,7 @@ app.use(compression());
 app.use(express.json());
 app.use(express.json({limit: '1mb'}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+app.use('/uploads', express.static('uploads'));
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 

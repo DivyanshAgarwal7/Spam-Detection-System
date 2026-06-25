@@ -134,7 +134,36 @@ function SpamDetector() {
         </button>
       </div>
 
-      <div className="absolute top-4 left-4">
+      <div className="absolute top-4 left-4 flex items-center gap-3">
+        <label className="cursor-pointer relative group">
+          {user?.avatarUrl ? (
+            <img src={user.avatarUrl} alt="Avatar" className="w-10 h-10 rounded-full border-2 border-slate-300 object-cover shadow-sm" />
+          ) : (
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shadow-sm border ${isDark ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}>👤</div>
+          )}
+          <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <span className="text-[10px] text-white font-bold uppercase tracking-wider">Edit</span>
+          </div>
+          <input type="file" className="hidden" accept="image/*" onChange={async (e) => {
+             const file = e.target.files[0];
+             if (!file) return;
+             const formData = new FormData();
+             formData.append('avatar', file);
+             try {
+                const token = localStorage.getItem('token');
+                const res = await api.post(`${import.meta.env.VITE_API_URI || ''}/api/v1/auth/avatar`, formData, {
+                   headers: { 
+                     'Content-Type': 'multipart/form-data',
+                     Authorization: `Bearer ${token}` 
+                   }
+                });
+                localStorage.setItem('user', JSON.stringify(res.data.user));
+                window.location.reload();
+             } catch(err) {
+                alert('Failed to upload avatar: ' + (err.response?.data?.error || err.message));
+             }
+          }} />
+        </label>
         <span
           className={`text-sm font-semibold px-4 py-2 rounded-full shadow-sm backdrop-blur-md ${
             isDark
@@ -142,7 +171,7 @@ function SpamDetector() {
               : "bg-white/30 text-slate-850 border border-white/20"
           }`}
         >
-          👤 {user?.username}
+          {user?.username}
         </span>
       </div>
 

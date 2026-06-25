@@ -1,10 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
-const { register, login, getMe, googleLogin, forgotPassword, resetPassword } = require('../controllers/authController');
+const { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
-const {  registerLimiter, loginLimiter } = require('../middleware/rateLimiter');
+const { registerLimiter, loginLimiter } = require('../middleware/rateLimiter');
+const multer = require('multer');
+const path = require('path');
 
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
+  },
+  filename: (req, file, cb) => {
+    cb(null, req.user.id + '-' + Date.now() + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage });
 const registerValidation = [
   body('username').trim().isLength({ min: 3, max: 30 }).withMessage('Username must be 3–30 characters'),
   body('email').isEmail().withMessage('Please enter a valid email'),
@@ -20,6 +31,7 @@ router.post('/', loginValidation,loginLimiter, login);
 router.post('/register', registerValidation,registerLimiter, register);
 router.post('/google', googleLogin);
 router.get('/me', protect, getMe);
+router.post('/avatar', protect, upload.single('avatar'), updateAvatar);
 
 const forgotPasswordValidation = [
   body('email').isEmail().withMessage('Please enter a valid email'),
