@@ -153,6 +153,31 @@ const History = () => {
                             onChange={() => toggleSelect(item._id)}
                         />
                         <span style={{ flex: 1 }}>{item.query}</span>
+                        {item.confidence != null && (
+                            <div style={{ display: 'flex', alignItems: 'center', width: '120px', marginRight: '10px' }}>
+                                <div style={{ 
+                                    flex: 1, 
+                                    height: '6px', 
+                                    background: '#e5e7eb', 
+                                    borderRadius: '3px',
+                                    overflow: 'hidden',
+                                    marginRight: '8px'
+                                }}>
+                                    <div style={{
+                                        height: '100%',
+                                        width: `${Math.min(item.confidence * 50 + 50, 100)}%`,
+                                        background: item.prediction === 'spam' || item.prediction === 'malicious' 
+                                            ? '#ef4444' 
+                                            : item.prediction === 'smishing' 
+                                                ? '#f97316' 
+                                                : '#22c55e'
+                                    }} />
+                                </div>
+                                <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: '500', width: '30px', textAlign: 'right' }}>
+                                    {Math.min(item.confidence * 50 + 50, 100).toFixed(0)}%
+                                </span>
+                            </div>
+                        )}
                         <span
                             style={{
                                 padding: '2px 10px',
