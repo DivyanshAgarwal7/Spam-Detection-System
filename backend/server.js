@@ -8,6 +8,7 @@ const express = require("express");
 const seedAdminUser = require("./seeders/adminSeeder");
 const { getHealthStatus } = require('./utils/healthCheck');
 const cors = require("cors");
+const config = require('./config');
 const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
 const helmet = require('helmet');
@@ -58,7 +59,7 @@ const connectWithRetry = async (retries=5, delay=5000) => {
 
   for(let attempt = 1; attempt <= retries; attempt++) {
     try {
-      await mongoose.connect(process.env.MONGODB_URI);
+      await mongoose.connect(config.mongodbUri);
             console.log(`✅ MongoDB connected successfully (attempt ${attempt})`);
             seedAdminUser();
             return true;
@@ -138,7 +139,11 @@ if(process.env.NODE_ENV === 'development'){
 // Start connection with retry
 connectWithRetry();
 
-app.use(cors());
+const corsOptions = {
+  origin: config.corsOrigins,
+  credentials: true,
+};
+app.use(cors(corsOptions));
 app.use(helmet());
 app.use(compression());
 app.use(express.json());
@@ -814,6 +819,7 @@ app.post("/scan-emails", protect, async (req, res) => {
   }
 });
 
+const PORT = config.port;
 app.use((err, req, res, next) => {
   if(err.type==='entity.too.large' || err.message==='request entity too large') {
     return res.status(413).json({
