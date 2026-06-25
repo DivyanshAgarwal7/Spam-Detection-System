@@ -259,15 +259,29 @@ app.post("/predict", protect, async (req, res) => {
         confidence: response.data.confidence,
       });
     } catch (historyError) {
-      console.error("Failed to save history:", historyError.message);
+
+      console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
     }
 
     res.json(response.data);
   } catch (error) {
-    console.error(`[${req.requestId}]`,error.message);
+Sentry.captureException(error, {
+      tags: {
+        endpoint: '/predict',
+        userId: req.user?.id || 'anonymous'
+      },
+      extra: {
+        text: req.body?.text?.substring(0, 100),
+        type: req.body?.type,
+        errorMessage: error.message
+      }
+    });
+
+    console.error(`[${req.requestId}]`, error.message);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
+
 
 console.log("History saved");
 
@@ -416,6 +430,17 @@ app.post("/bulk-predict", protect, upload.single("file"), async (req, res) => {
 
     res.json(response.data);
   } catch (error) {
+    //Capture error in Sentry 
+    Sentry.captureException(error, {
+      tags: {
+        endpoint: '/bulk-predict',
+        userId: req.user?.id || 'anonymous'
+      },
+      extra: {
+        fileSize: req.file?.size,
+        fileName: req.file?.originalname,
+      }
+    });
     if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
       console.error("Flask ML API is unavailable:", error.message);
       return res.status(503).json({
