@@ -5,8 +5,8 @@ const exportPdfReport = async (req, res) => {
   try {
     // Get analytics data to include in the report
     const total = await History.countDocuments({ user: req.user.id });
-    const spam = await History.countDocuments({ user: req.user.id, prediction: 'spam' });
-    const nonSpam = await History.countDocuments({ user: req.user.id, prediction: 'ham' }); // Assuming 'ham' is non-spam label
+    const spam = await History.countDocuments({ user: req.user.id, prediction: { $in: ['spam', 'smishing', 'malicious'] } });
+    const nonSpam = await History.countDocuments({ user: req.user.id, prediction: { $in: ['ham', 'safe'] } });
     
     let spamPercentage = 0;
     if (total > 0) {
