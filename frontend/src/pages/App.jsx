@@ -19,6 +19,7 @@ import Footer from "../components/Footer";
 import InstallAppButton from "../components/InstallAppButton";
 import { redirect } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
+import RulesManager from "../components/RulesManager";
 
 function SpamDetector() {
   const navigate = useNavigate();
@@ -343,6 +344,9 @@ function SpamDetector() {
               Email Scanner
             </button>
             <button
+              onClick={() => setActiveTab("rules")}
+              className={`pb-1 px-4 transition-all border-b-2 ${
+                activeTab === "rules"
               onClick={() => setActiveTab("history")}
               className={`pb-1 px-4 transition-all border-b-2 ${
                 activeTab === "history"
@@ -350,6 +354,7 @@ function SpamDetector() {
                   : "border-transparent opacity-50 hover:opacity-75"
               }`}
             >
+              Rules Manager
               History
             </button>
             <button
@@ -604,6 +609,8 @@ function SpamDetector() {
             <SpamInsightsDashboard />
           ) : activeTab === "scanner" ? (
             <EmailScannerDashboard />
+          ) : activeTab === "rules" ? (
+            <RulesManager />
           ) : activeTab === "history" ? (
             <History />
           ) : (

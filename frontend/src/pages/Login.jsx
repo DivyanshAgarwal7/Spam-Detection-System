@@ -65,8 +65,10 @@ const Login = () => {
   return (
     <div className={`min-h-screen flex items-center justify-center px-4 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light
       }`}>
-      <div className={`w-full max-w-md backdrop-blur-xl border rounded-3xl shadow-2xl p-8 sm:p-10 transition-all duration-500 ${isDark ? activeTheme.cardDark : activeTheme.card
-        }`}>
+  // Line 68 change: 
+// Add a slightly distinct border color tint and change shadow-2xl to shadow-[0_20px_50px_rgba(0,0,0,0.3)]
+className={`w-full max-w-md backdrop-blur-xl border border-white/20 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] p-8 sm:p-10 transition-all duration-300`}
+        
         <h2 className="flex items-center justify-center gap-3 text-3xl font-extrabold mb-2"><img src={SpamLogo} alt="Spam Logo" className="w-24 h-16 object-contain"></img> Spam Detector</h2>
         <p className="text-center opacity-70 mb-8 text-sm font-semibold">Sign in to your account</p>
 
