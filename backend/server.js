@@ -1057,6 +1057,15 @@ app.use((err, req, res, next) => {
 
 app.use(errorHandler);
 
+// ========================================
+// START SERVER
+// ========================================
+
+const PORT = config.port;
+const server = app.listen(PORT, () => {
+  const totalTime = Date.now() - SERVER_START_TIME;
+  displayBanner();
+  console.log(`⏱️ Total startup time: ${totalTime}ms`);
 // ====== PREDICTION STATISTICS ======
 app.get('/api/stats', protect, async (req, res) => {
     try {
@@ -1248,6 +1257,7 @@ app.get("/imap/scan-results", protect, async (req, res) => {
     console.error(error.message);
     res.status(500).json({ error: "Something went wrong" });
   }
+});
 });
 
 // ========================================
