@@ -102,6 +102,16 @@ pickle.dump(vectorizer, open("vectorizer.pkl", "wb"))
 
 ## 🐍 Python API (Flask)
 
+### Running the Backend API
+
+This project contains two backend implementations. You can choose to run either Flask or FastAPI.
+
+**Option 1: Running Flask (api.py)**
+```bash
+cd backend
+python api.py
+```
+
 ### 📦 Install Dependencies
 
 ```bash
@@ -867,5 +877,3 @@ This project is open-source and available under the MIT License.
 You are free to use, modify, and distribute this project for personal or commercial use, provided that proper credit is given.
 
 For more details, see the [LICENSE](LICENSE) file.
-
-
