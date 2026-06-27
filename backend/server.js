@@ -86,6 +86,7 @@ const connectWithRetry = async (retries=5, delay=5000) => {
     try {
       await mongoose.connect(config.mongodbUri);
             console.log(`✅ MongoDB connected successfully (attempt ${attempt})`);
+            monitorConnectionPool();
             seedAdminUser();
             return true;
     } catch (err) {
@@ -129,16 +130,7 @@ const monitorConnectionPool = () => {
   },3000); // every 3 seconds
 };
 
-//Call after MONGODB connection is established
-const mongoStart = Date.now();
-mongoose
-    .connect(process.env.MONGODB_URI)
-    .then(() => {
-        console.log('MongoDB', mongoStart);
-        monitorConnectionPool(); 
-        seedAdminUser();
-    })
-    .catch((err) => console.error("❌ MongoDB connection error:", err));
+
 
 
 if(process.env.NODE_ENV === 'development'){
