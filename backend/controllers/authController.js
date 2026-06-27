@@ -3,6 +3,9 @@ const nodemailer = require('nodemailer');
 const { validationResult } = require('express-validator');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -33,7 +36,7 @@ const register = async (req, res) => {
     res.status(201).json({
       message: 'Account created successfully!',
       token,
-      user: { id: user._id, username: user.username, email: user.email },
+      user: { id: user._id, username: user.username, email: user.email, avatarUrl: user.avatarUrl },
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -69,7 +72,7 @@ const login = async (req, res) => {
     res.json({
       message: 'Login successful!',
       token,
-      user: { id: user._id, username: user.username, email: user.email },
+      user: { id: user._id, username: user.username, email: user.email, avatarUrl: user.avatarUrl },
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -158,7 +161,15 @@ const updateAvatar = async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
     
-    const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    const filename = `${req.user.id}-${Date.now()}.webp`;
+    const filepath = path.join(__dirname, '..', 'uploads', filename);
+
+    await sharp(req.file.buffer)
+      .resize(250, 250, { fit: 'cover' })
+      .toFormat('webp')
+      .toFile(filepath);
+
+    const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
     
     const user = await User.findByIdAndUpdate(
       req.user.id,
