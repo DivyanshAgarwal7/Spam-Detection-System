@@ -115,6 +115,10 @@ def heuristic_url_is_malicious(url):
     return tld in SUSPICIOUS_TLDS
 
 
+# Maximum number of characters accepted by the /predict endpoint. Anything
+# longer is rejected up front to avoid slow ML inference and memory spikes.
+MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 10000))
+
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -135,14 +139,34 @@ def health():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Request body must be a JSON object"}), 400
+
         text = data.get("text")
-        
+
         input_type = data.get("type", "message")
-        if not text:
+
+        # Reject missing/empty input.
+        if text is None or (isinstance(text, str) and not text.strip()):
             with open(LOG_FILE, "a") as f:
                 f.write(f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n")
             return jsonify({"error": "No text provided"}), 400
+
+        # Strict type checking: the message field must be a string.
+        if not isinstance(text, str):
+            return jsonify({
+                "error": f"'text' must be a string, got {type(text).__name__}"
+            }), 400
+
+        # Maximum-length validation before any vectorization/inference work.
+        if len(text) > MAX_MESSAGE_LENGTH:
+            return jsonify({
+                "error": (
+                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
+                    f"characters (got {len(text)})"
+                )
+            }), 400
 
         # Translate incoming text to English if it is not in English
         original_text = text
