@@ -27,4 +27,34 @@ const resetLimiter = rateLimit({
   }
 });
 
-module.exports = { loginLimiter, registerLimiter, resetLimiter };
+// Throttle the analyze/predict endpoint per client IP so a single client can't
+// flood the ML inference service with rapid bursts.
+const PREDICT_WINDOW_MS = Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
+const PREDICT_MAX = Number(process.env.PREDICT_RATE_LIMIT_MAX) || 30;
+
+const predictLimiter = rateLimit({
+  windowMs: PREDICT_WINDOW_MS,
+  max: PREDICT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res, next, options) => {
+    const retryAfterSeconds = Math.ceil(options.windowMs / 1000);
+    // express-rate-limit sets Retry-After itself, but set it explicitly so the
+    // contract is guaranteed regardless of header-mode configuration.
+    res.setHeader("Retry-After", retryAfterSeconds);
+    res.status(options.statusCode).json({
+      success: false,
+      error: "Too many analyze requests. Please slow down and try again shortly.",
+      retryAfter: retryAfterSeconds,
+    });
+  },
+});
+
+module.exports = {
+  loginLimiter,
+  registerLimiter,
+  resetLimiter,
+  predictLimiter,
+  PREDICT_MAX,
+  PREDICT_WINDOW_MS,
+};

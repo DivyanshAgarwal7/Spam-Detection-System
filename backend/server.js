@@ -1,4 +1,4 @@
-const { formatError, errorHandler, errorCodes } = require('./utils/errorHelper');
+const { formatError, errorHandler, errorCodes, classifyMlApiError } = require('./utils/errorHelper');
 require("dotenv").config();
 const dns = require("dns");
 const validateEnv = require('./utils/validateEnv');
@@ -227,6 +227,7 @@ app.use("/api/rules", ruleRoutes);
 app.use("/api/reports", reportRoutes);
 
 const { protect } = require("./middleware/authMiddleware");
+const { predictLimiter } = require("./middleware/rateLimiter");
 
 // ===== PREDICTION COUNT =====
 app.get('/api/history/count',protect,async (req,res) => {
@@ -258,7 +259,7 @@ app.get("/health", async (req, res) => {
 });
 
 // Protected: only authenticated users can predict
-app.post("/predict", protect, async (req, res) => {
+app.post("/predict", predictLimiter, protect, async (req, res) => {
   try {
     console.log("Reached /predict");
     const { text, type, sender } = req.body;
@@ -361,7 +362,8 @@ app.post("/predict", protect, async (req, res) => {
         type: type.toLowerCase(),
       },
       {
-        headers: { "X-Forwarded-For": req.ip || req.connection.remoteAddress }
+        headers: { "X-Forwarded-For": req.ip || req.connection.remoteAddress },
+        timeout: Number(process.env.ML_API_TIMEOUT_MS) || 15000,
       }
     );
     console.log("Flask responded:", response.data);
@@ -395,7 +397,11 @@ Sentry.captureException(error, {
     });
 
     console.error(`[${req.requestId}]`, error.message);
-    res.status(500).json({ error: "Something went wrong" });
+
+    // Distinguish ML API failures (timeout / unavailable / upstream 4xx vs 5xx)
+    // so the frontend can show specific messaging and a retry affordance.
+    const { status, body } = classifyMlApiError(error);
+    res.status(status).json(body);
   }
 });
 
