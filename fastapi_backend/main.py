@@ -14,8 +14,6 @@ from backend.config import FRONTEND_URL, BASE_URL, PORT
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("spam_detection_logger")
 
-xai_service = XAIService()
-
 # ── Resolve model paths relative to this file ────────────────────────────────
 # FIX: Use pathlib.Path so the app works regardless of the working directory.
 # Previously, hardcoded relative strings like "linear_svm_model.pkl" would
@@ -30,6 +28,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 model         = joblib.load(BASE_DIR / "linear_svm_model.pkl")
 vectorizer    = joblib.load(BASE_DIR / "backend" / "tfidf_vectorizer.pkl")
 label_encoder = joblib.load(BASE_DIR / "label_encoder.pkl")
+
+xai_service = XAIService(model=model, vectorizer=vectorizer, label_encoder=label_encoder)
 
 app = FastAPI(title="Spam Detection System")
 
@@ -121,16 +121,16 @@ def health():
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 # EMAIL DATABASE ROUTES (Issue #13)
-from backend.emails import router as emails_router
-# from backend.database import init_db  # Uncomment once DB is configured
+from fastapi_backend.emails import router as emails_router
+# from fastapi_backend.database import init_db  # Uncomment once DB is configured
 # init_db()
 app.include_router(emails_router)
 
 # EXPORT ROUTES (Issue #23)
-from backend.export import router as export_router
+from fastapi_backend.export import router as export_router
 app.include_router(export_router)
 
 # ── Run directly ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=PORT, reload=True)
+    uvicorn.run("fastapi_backend.main:app", host="0.0.0.0", port=PORT, reload=True)

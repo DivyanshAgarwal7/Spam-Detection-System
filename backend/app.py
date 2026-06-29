@@ -42,9 +42,12 @@ def log_request(response):
     return response
 
 # ─── RATE LIMITER ────────────────────────────────────────────────
+def get_forwarded_address():
+    return request.headers.get("X-Forwarded-For", request.remote_addr)
+
 limiter = Limiter(
     app=app,
-    key_func=get_remote_address,
+    key_func=get_forwarded_address,
     default_limits=["10 per minute"],
     storage_uri="memory://",
     strategy="fixed-window",
@@ -120,13 +123,44 @@ def predict():
             logger.warning("No text provided for prediction")
             return jsonify({"error": "No text provided"}), 400
 
+        # Translate incoming text to English if it is not in English
+        original_text = text
+        detected_language = "en"
+        translated = False
+        
+        if text.strip():
+            try:
+                from langdetect import detect
+                detected_language = detect(text)
+            except Exception:
+                detected_language = "en"
+                
+            if detected_language != "en":
+                try:
+                    from deep_translator import GoogleTranslator
+                    translated_text = GoogleTranslator(source='auto', target='en').translate(text)
+                    if translated_text and translated_text.strip().lower() != text.strip().lower():
+                        text = translated_text
+                        translated = True
+                except Exception:
+                    pass
+
         text_vector = vectorizer.transform([text])
         prediction = model.predict(text_vector)
         final_output = label_encoder.inverse_transform(prediction)[0]
 
         logger.info(f"Prediction: '{text[:50]}...' -> {final_output}")
             
-        return jsonify({"input": text, "prediction": final_output})
+        response_data = {
+            "input": original_text,
+            "prediction": final_output,
+            "detected_language": detected_language,
+            "translated": translated
+        }
+        if translated:
+            response_data["translated_text"] = text
+            
+        return jsonify(response_data)
 
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}")

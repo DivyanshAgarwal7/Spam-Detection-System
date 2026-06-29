@@ -102,6 +102,14 @@ export const ThemeProvider = ({ children }) => {
     return () => mediaQuery.removeEventListener("change", listener);
   }, [themeMode]);
 
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }, [isDark]);
+
   const activeTheme = THEME_PALETTES[colorTheme] || THEME_PALETTES.ocean;
 
   return (

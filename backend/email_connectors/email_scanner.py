@@ -54,11 +54,34 @@ def scan_emails_with_model(emails):
         }
         
         # Phishing integration preparation (optional header analysis)
+        has_header_risk = False
         if analyze_headers and e.get("raw_headers"):
             try:
                 header_analysis = analyze_headers(e["raw_headers"])
                 email_result["risk_score"] = header_analysis.get("risk_score")
                 email_result["trust_level"] = header_analysis.get("trust_level")
+                has_header_risk = True
+            except Exception:
+                pass
+                
+        # Fallback: check sender's domain metadata if header analysis wasn't performed/successful
+        if not has_header_risk and e.get("sender"):
+            try:
+                sender_val = e.get("sender", "")
+                if "@" in sender_val:
+                    sender_domain = sender_val.split("@")[-1].lower().strip(" >")
+                    if sender_domain:
+                        import domain_checker
+                        domain_analysis = domain_checker.analyze_domain(sender_domain)
+                        risk_val = domain_analysis.get("risk_score", 0)
+                        email_result["risk_score"] = risk_val
+                        
+                        if risk_val <= 20:
+                            email_result["trust_level"] = "Trusted"
+                        elif risk_val <= 60:
+                            email_result["trust_level"] = "Suspicious"
+                        else:
+                            email_result["trust_level"] = "High Risk"
             except Exception:
                 pass
                 

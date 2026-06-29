@@ -1,11 +1,10 @@
-// Force rebuild - trigger CI
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import "../App.css";
 import FeatureImportance from "../components/FeatureImportance";
-
+import PredictionExplanation from "../components/PredictionExplanation";
 import History from "../components/History";
 import WordCloud from "../components/WordCloud";
 import FeedbackWidget from "../components/FeedbackWidget";
@@ -18,14 +17,14 @@ import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
 import Chatbot from "../components/Chatbot";
 import Footer from "../components/Footer";
-//import InstallAppButton from "../components/InstallAppButton";
-//import PredictionExplanation from "../components/PredictionExplanation";
-//import RulesManager from "../components/RulesManager";
+import InstallAppButton from "../components/InstallAppButton";
+import RulesManager from "../components/RulesManager";
 
-function SpamDetector() {
+function App() {
   const navigate = useNavigate();
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
+  const [errorInfo, setErrorInfo] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [wordOfDay, setWordOfDay] = useState(null);
@@ -207,8 +206,7 @@ function SpamDetector() {
 
   const confidenceValue = Number(confidencePct);
 
-  const riskLevel =
-    confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
+  const riskLevel = confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
 
   return (
     <div
@@ -218,10 +216,9 @@ function SpamDetector() {
     >
       {/* Top Controls */}
       <div className="absolute top-4 right-4 flex gap-3 flex-wrap justify-end">
-        <button
-          onClick={() => {
-            setThemeMode(isDark ? 'light' : 'dark');
-          }}
+        {/* <button
+          onClick={() => setThemeMode(isDark ? 'light' : 'dark')}
+          
           className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
           style={{
             background: isDark ? '#fbbf24' : '#1e293b',
@@ -231,7 +228,7 @@ function SpamDetector() {
           }}
         >
           {isDark ? '☀️' : '🌙'}
-        </button>
+        </button> */}
         <InstallAppButton />
         <button
           onClick={() => setShowSettings(!showSettings)}
@@ -275,7 +272,9 @@ function SpamDetector() {
             <span className="text-[10px] text-white font-bold uppercase tracking-wider">Edit</span>
           </div>
           <input type="file" className="hidden" accept="image/*" onChange={async (e) => {
+            const file = e.target.files[0];
             if (!file) return;
+            const formData = new FormData();
             formData.append('avatar', file);
             try {
               const token = localStorage.getItem('token');
@@ -287,10 +286,7 @@ function SpamDetector() {
               });
               localStorage.setItem('user', JSON.stringify(res.data.user));
               window.location.reload();
-            } catch(err) {
-              alert('Failed to upload avatar: ' + (err.response?.data?.error || err.message));
-            }
-             const file = e.target.files[0];
+               const file = e.target.files[0];
              if (!file) return;
              const formData = new FormData();
              formData.append('avatar', file);
@@ -305,6 +301,9 @@ function SpamDetector() {
              } catch(err) {
                 alert('Failed to upload avatar: ' + (err.response?.data?.error || err.message));
              }
+            } catch(err) {
+              alert('Failed to upload avatar: ' + (err.response?.data?.error || err.message));
+            }
           }} />
         </label>
         <span
@@ -582,7 +581,52 @@ function SpamDetector() {
                   {loading ? "Analyzing..." : `Analyze ${type === "url" ? "URL" : type}`}
                 </button>
 
-                {result && (
+                {/* Error Section */}
+                {result === "Error" && errorInfo && (
+                  <div
+                    className={`mt-5 rounded-3xl p-5 shadow-lg border ${
+                      isDark
+                        ? "bg-yellow-500/10 border-yellow-600/40"
+                        : "bg-yellow-50 border-yellow-300"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="text-2xl leading-none">⚠️</span>
+                      <div className="flex-1">
+                        <h3
+                          className={`text-base font-bold ${
+                            isDark ? "text-yellow-300" : "text-yellow-800"
+                          }`}
+                        >
+                          {errorInfo.title}
+                        </h3>
+                        <p
+                          className={`mt-1 text-sm ${
+                            isDark ? "text-yellow-200/80" : "text-yellow-700"
+                          }`}
+                        >
+                          {errorInfo.message}
+                        </p>
+                        {errorInfo.retryable && (
+                          <button
+                            onClick={handlePredict}
+                            disabled={loading}
+                            className={`mt-3 px-4 py-2 rounded-lg font-semibold text-sm transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed ${
+                              isDark
+                                ? "bg-yellow-500 text-slate-900 hover:bg-yellow-400"
+                                : "bg-yellow-500 text-white hover:bg-yellow-600"
+                            }`}
+                          >
+                            {loading ? "Retrying..." : "🔄 Retry"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Results Section */}
+                {result && result !== "Error" && (
                   <div
                     className={`mt-5 rounded-3xl p-5 shadow-lg border ${
                       isDark
@@ -642,6 +686,73 @@ function SpamDetector() {
                     )}
 
                     {result && confidence !== null && result !== "Error" && (
+                      <div className="mt-4 text-left">
+                        <p className="text-xs font-semibold mb-1 opacity-70">
+                          Model Confidence: {confidencePct}%
+                        </p>
+                        <div className={`w-full rounded-full h-2 ${isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                          <div
+                            className={`h-3 rounded-full transition-all duration-500 ${
+                              result === "ham" || result === "safe"
+                                ? "bg-green-500"
+                                : result === "spam" || result === "malicious"
+                                  ? "bg-red-500"
+                                  : "bg-orange-500"
+                            }`}
+                            style={{ width: `${confidencePct}%` }}
+                          />
+                        </div>
+
+                        <div className="mb-5">
+                          <p className="text-sm opacity-70 mb-2">Risk Level</p>
+                          <span className={`px-4 py-2 rounded-full text-sm font-semibold ${
+                            riskLevel === "Low"
+                              ? "bg-green-100 text-green-700"
+                              : riskLevel === "Medium"
+                                ? "bg-yellow-100 text-yellow-700"
+                                : "bg-red-100 text-red-700"
+                          }`}>
+                            {riskLevel === "Low" && "🟢 Low"}
+                            {riskLevel === "Medium" && "🟠 Medium"}
+                            {riskLevel === "High" && "🔴 High"}
+                          </span>
+                        </div>
+
+                        <div className="mt-4 mb-4">
+                          <button
+                            onClick={() => {
+                              const fullReport = `
+        📊 Spam Detection Report
+        ─────────────────────
+        🔍 Prediction: ${result === 'ham' || result === 'safe' ? '✅ Safe' : result === 'spam' || result === 'malicious' ? '🚫 Spam/Malicious' : result === 'smishing' ? '⚠️ Fraud' : '⚠️ Error'}
+        📝 Message: ${text}
+        📈 Confidence: ${confidence ? confidencePct + '%' : 'N/A'}
+        ⚠️ Risk Level: ${riskLevel}
+        📅 Date: ${new Date().toLocaleString()}
+         ─────────────────────
+        Powered by Spam Detection System`;
+                              navigator.clipboard.writeText(fullReport);
+                              setCopied(true);
+                              setTimeout(() => setCopied(false), 2000);
+                            }}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 w-full justify-center ${
+                              isDark
+                                ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                                : "bg-slate-200 hover:bg-slate-300 text-slate-700"
+                            }`}
+                          >
+                            {copied ? '✅ Copied!' : '📋 Copy Full Report'}
+                          </button>
+                        </div>
+
+                        <p className="text-sm opacity-75 leading-relaxed">
+                          {(result === "spam" || result === "smishing" || result === "malicious") &&
+                            "This content contains characteristics commonly found in spam, phishing, or malicious attacks."}
+                          {(result === "ham" || result === "safe") &&
+                            "No suspicious patterns were detected in this content."}
+                        </p>
+                      </div>
+                    )}
                     <div className="mt-4 text-left">
                      <p className="text-xs font-semibold mb-1 opacity-70">
                         Model Confidence: {confidencePct}%
@@ -675,7 +786,7 @@ function SpamDetector() {
         {riskLevel === "High" && "🔴 High"}
       </span>
     </div>
-
+  
     {/* Copy Full Report Button */}
     <div className="mt-4 mb-4">
       <button
@@ -722,6 +833,7 @@ Powered by Spam Detection System`;
                   setResult("");
                   setConfidence(null);
                   setExplanation(null);
+                  setErrorInfo(null);
                   setType("message");
                 }}
                 className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${
@@ -741,7 +853,7 @@ Powered by Spam Detection System`;
         "No suspicious patterns were detected in this content."}
     </p>
   </div>
-)}
+
                   </div>
                 )}
 
@@ -759,6 +871,7 @@ Powered by Spam Detection System`;
                     setText("");
                     setResult("");
                     setConfidence(null);
+                    setErrorInfo(null);
                     setType("message");
                   }}
                   className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${
@@ -895,4 +1008,5 @@ Powered by Spam Detection System`;
     </div>
   );
 }
-export default SpamDetector;
+  
+export default App;

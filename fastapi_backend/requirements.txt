@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+mysql-connector-python
+fpdf2
+scikit-learn==1.6.1
+joblib==1.5.1
+python-dotenv==1.1.1
+numpy

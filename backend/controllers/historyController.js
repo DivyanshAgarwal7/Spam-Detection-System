@@ -4,13 +4,40 @@ const mongoose = require("mongoose");
 // Get logged-in user's history
 const getHistory = async (req, res) => {
   try {
-    const history = await History.find({ user: req.user.id })
-      .sort({ createdAt: -1 });
+    //Get pagination parameters from query
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const safeLimit = Math.min(limit, 100); // Limit to 100 items per page
+    const skip = (page - 1) * safeLimit;
 
-    res.json(history);
+    //Get total count and Paginated data
+    const total = await History.countDocuments({ user: req.user.id });
+    const history = await History.find({ user: req.user.id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(safeLimit);
+
+    const totalPages = Math.ceil(total / safeLimit);
+
+    res.json({
+      success: true,
+      data:history,
+      pagination: {
+        total,
+        page,
+        limit: safeLimit,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+    });
   } catch (err) {
-    console.error("Get history error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(500).json({
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Server error",
+      },
+    });
   }
 };
 

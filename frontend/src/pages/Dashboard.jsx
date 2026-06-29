@@ -15,8 +15,9 @@ import {
 } from "recharts";
 import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
+import Footer from "../components/Footer";
 
-const API_BASE = import.meta.env.VITE_API_URI || "";
+const API_BASE = import.meta.env.VITE_PYTHON_URI || "http://127.0.0.1:5000";
 
 // Known verdict labels the ML API can return (text -> ham/spam/smishing, url -> safe/malicious).
 const LABEL_COLORS = {
@@ -107,6 +108,27 @@ export default function Dashboard() {
       ]
     : [];
 
+  const handleExportPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      // Use standard axios if interceptor not attached to 'api' object or use 'api'
+      const response = await api.get(`${API_BASE}/reports/export-pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'spam_detection_report.pdf');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error('Error downloading PDF:', error);
+      alert('Failed to download PDF report');
+    }
+  };
+
   return (
     <div
       className={`min-h-screen px-4 py-8 sm:px-8 transition-all duration-500 ${
@@ -128,6 +150,12 @@ export default function Dashboard() {
               }`}
             >
               ← Back to Detector
+            </button>
+            <button
+              onClick={handleExportPDF}
+              className={`px-4 py-2.5 rounded-xl font-bold text-white shadow-md active:scale-95 transition-all bg-emerald-500 hover:bg-emerald-600`}
+            >
+              📄 Export PDF
             </button>
             <button
               onClick={() => fetchAll()}
@@ -245,6 +273,7 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+      <Footer />
     </div>
   );
 }

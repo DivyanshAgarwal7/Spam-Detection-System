@@ -1,7 +1,11 @@
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 const { validationResult } = require('express-validator');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -10,6 +14,17 @@ const generateToken = (userId) => {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
+
+const buildAuthResponse = (user, token) => ({
+  token,
+  user: {
+    id: user._id,
+    username: user.username,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    provider: user.provider,
+  },
+});
 
 const register = async (req, res) => {
   try {
@@ -31,8 +46,7 @@ const register = async (req, res) => {
 
     res.status(201).json({
       message: 'Account created successfully!',
-      token,
-      user: { id: user._id, username: user.username, email: user.email },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -67,8 +81,7 @@ const login = async (req, res) => {
 
     res.json({
       message: 'Login successful!',
-      token,
-      user: { id: user._id, username: user.username, email: user.email },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -136,14 +149,7 @@ const googleLogin = async (req, res) => {
 
     res.json({
       message: 'Login successful!',
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        provider: user.provider,
-      },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Google Auth Error:', err);
@@ -151,4 +157,121 @@ const googleLogin = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, googleLogin };
+const updateAvatar = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const filename = `${req.user.id}-${Date.now()}.webp`;
+    const filepath = path.join(__dirname, '..', 'uploads', filename);
+
+    await sharp(req.file.buffer)
+      .resize(250, 250, { fit: 'cover' })
+      .toFormat('webp')
+      .toFile(filepath);
+
+    const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
+
+    // Clean up old avatar if it exists
+    const currentUser = await User.findById(req.user.id);
+    if (currentUser && currentUser.avatarUrl && currentUser.avatarUrl.includes('/uploads/')) {
+      try {
+        const oldFilename = currentUser.avatarUrl.split('/uploads/')[1];
+        const oldFilePath = path.join(__dirname, '..', 'uploads', oldFilename);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+      } catch (err) {
+        console.error('Failed to delete old avatar:', err);
+      }
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { avatarUrl },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'Avatar updated successfully', user });
+  } catch (err) {
+    console.error('Avatar upload error:', err);
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+};
+
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) {
+      // Send a successful response to prevent email enumeration
+      return res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
+    }
+
+    // Generate token using password hash to make it single-use
+    const secret = process.env.JWT_SECRET + user.password;
+    const token = jwt.sign({ id: user._id, email: user.email }, secret, { expiresIn: '15m' });
+
+    // Mock reset link
+    const resetLink = `http://localhost:3000/reset-password/${user._id}/${token}`;
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
+      port: process.env.EMAIL_PORT || 587,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      await transporter.sendMail({
+        from: '"Spam Detection System" <noreply@spamdetection.local>',
+        to: user.email,
+        subject: 'Password Reset Request',
+        text: `Please use the following link to reset your password: ${resetLink} \n\nThis link expires in 15 minutes.`,
+      });
+    } else {
+      console.log(`[DEMO] Password Reset Link for ${user.email}: ${resetLink}`);
+    }
+
+    res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Server error. Please try again later.' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { id, token } = req.params;
+    const { password } = req.body;
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired token.' });
+    }
+
+    const secret = process.env.JWT_SECRET + user.password;
+    try {
+      jwt.verify(token, secret);
+    } catch (err) {
+      return res.status(400).json({ error: 'Invalid or expired token.' });
+    }
+
+    user.password = password;
+    await user.save();
+
+    res.json({ message: 'Password has been successfully reset. You can now login.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Server error. Please try again later.' });
+  }
+};
+
+module.exports = { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword };
