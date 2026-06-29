@@ -24,6 +24,7 @@ function App() {
   const navigate = useNavigate();
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
+  const [errorInfo, setErrorInfo] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [explanation, setExplanation] = useState(null); 
   const [loading, setLoading] = useState(false);
@@ -74,10 +75,63 @@ function App() {
     THEME_PALETTES,
   } = useTheme();
 
+// Map a failed /predict request to a user-facing title, message and whether
+// a retry is worth offering. Prefers the structured fields the Express layer
+// returns (code/retryable), with sensible fallbacks for network errors.
+const classifyPredictError = (error) => {
+  const data = error?.response?.data;
+  const status = error?.response?.status;
+  const code = data?.code;
+
+  if (code === "ML_TIMEOUT") {
+    return {
+      title: "Request timed out",
+      message: data.error || "The analysis service took too long to respond.",
+      retryable: true,
+    };
+  }
+  if (code === "ML_SERVICE_UNAVAILABLE") {
+    return {
+      title: "Service unavailable",
+      message: data.error || "The analysis service is currently unavailable.",
+      retryable: true,
+    };
+  }
+  if (code === "ML_SERVICE_ERROR") {
+    return {
+      title: "Analysis failed",
+      message: data.error || "The analysis service encountered an error.",
+      retryable: true,
+    };
+  }
+  if (code === "INVALID_INPUT" || (status >= 400 && status < 500)) {
+    return {
+      title: "Invalid input",
+      message:
+        data?.error || "Your message could not be analyzed. Please review it and try again.",
+      retryable: false,
+    };
+  }
+  // No response (network failure / CORS / server down) or unknown error.
+  if (!error?.response) {
+    return {
+      title: "Connection problem",
+      message: "Couldn't reach the server. Check your connection and try again.",
+      retryable: true,
+    };
+  }
+  return {
+    title: "Something went wrong",
+    message: data?.error || "An unexpected error occurred. Please try again.",
+    retryable: true,
+  };
+};
+
 const handlePredict = async () => {
   if (!text || text.trim().length === 0) return;
   try {
     setLoading(true);
+    setErrorInfo(null);
     const res = await api.post(`${import.meta.env.VITE_API_URI}/predict`, {
       text: text,
       type: type,
@@ -88,9 +142,9 @@ const handlePredict = async () => {
   } catch (err) {
     console.error("Predict error:", err);
     setResult("Error");
-    setExplanation(null); 
-    setConfidence(null);
     setExplanation(null);
+    setConfidence(null);
+    setErrorInfo(classifyPredictError(err));
   } finally {
     setLoading(false);
   }
@@ -465,8 +519,52 @@ const handlePredict = async () => {
                   {loading ? "Analyzing..." : `Analyze ${type === "url" ? "URL" : type}`}
                 </button>
 
+                {/* Error Section */}
+                {result === "Error" && errorInfo && (
+                  <div
+                    className={`mt-5 rounded-3xl p-5 shadow-lg border ${
+                      isDark
+                        ? "bg-yellow-500/10 border-yellow-600/40"
+                        : "bg-yellow-50 border-yellow-300"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="text-2xl leading-none">⚠️</span>
+                      <div className="flex-1">
+                        <h3
+                          className={`text-base font-bold ${
+                            isDark ? "text-yellow-300" : "text-yellow-800"
+                          }`}
+                        >
+                          {errorInfo.title}
+                        </h3>
+                        <p
+                          className={`mt-1 text-sm ${
+                            isDark ? "text-yellow-200/80" : "text-yellow-700"
+                          }`}
+                        >
+                          {errorInfo.message}
+                        </p>
+                        {errorInfo.retryable && (
+                          <button
+                            onClick={handlePredict}
+                            disabled={loading}
+                            className={`mt-3 px-4 py-2 rounded-lg font-semibold text-sm transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed ${
+                              isDark
+                                ? "bg-yellow-500 text-slate-900 hover:bg-yellow-400"
+                                : "bg-yellow-500 text-white hover:bg-yellow-600"
+                            }`}
+                          >
+                            {loading ? "Retrying..." : "🔄 Retry"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Results Section */}
-                {result && (
+                {result && result !== "Error" && (
                   <div
                     className={`mt-5 rounded-3xl p-5 shadow-lg border ${
                       isDark
@@ -673,6 +771,7 @@ Powered by Spam Detection System`;
                   setResult("");
                   setConfidence(null);
                   setExplanation(null);
+                  setErrorInfo(null);
                   setType("message");
                 }}
                 className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${
@@ -710,6 +809,7 @@ Powered by Spam Detection System`;
                     setText("");
                     setResult("");
                     setConfidence(null);
+                    setErrorInfo(null);
                     setType("message");
                   }}
                   className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${
