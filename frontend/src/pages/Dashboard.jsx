@@ -66,6 +66,7 @@ export default function Dashboard() {
   const [range, setRange] = useState("daily");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [personalStats, setPersonalStats] = useState(null);
 
   const fetchAll = useCallback(async (selectedRange = range) => {
     setLoading(true);
@@ -75,12 +76,14 @@ export default function Dashboard() {
         api.get(`${API_BASE}/analytics/summary`),
         api.get(`${API_BASE}/analytics/trends`, { params: { range: selectedRange } }),
         api.get(`${API_BASE}/analytics/breakdown`),
+        api.get(`${API_BASE}/analytics/me`),
       ]);
       setSummary(summaryRes.data);
       const pivoted = pivotTrends(trendsRes.data);
       setTrends(pivoted.data);
       setTrendLabels(pivoted.labels);
       setBreakdown(pivotBreakdown(breakdownRes.data));
+      setPersonalStats(meRes.data);
     } catch (err) {
       console.error(err);
       setError("Failed to load analytics data.");
@@ -170,6 +173,28 @@ export default function Dashboard() {
         {error && (
           <div className="p-3 mb-6 text-sm font-semibold rounded-xl bg-red-500/10 border border-red-500/35 text-red-100">
             ⚠️ {error}
+          </div>
+        )}
+
+        {/* 🚀 New Personal Analytics Summary Widget */}
+        {personalStats && (
+          <div className={`mb-6 rounded-3xl p-6 shadow-xl border overflow-hidden relative ${isDark ? 'bg-gradient-to-r from-slate-900 to-slate-800 border-slate-700' : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-indigo-100'}`}>
+             <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 rounded-full bg-blue-500 opacity-10 blur-2xl"></div>
+             
+             <h2 className="text-xl font-bold mb-3 flex items-center gap-2">
+               <span className="text-2xl">👋</span> Your Spam Hunting Record
+             </h2>
+             
+             <p className={`text-base md:text-lg font-medium leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+               You've scanned a total of <span className="font-black text-blue-500">{personalStats.total_predictions}</span> items. 
+               We found <span className="font-bold text-red-500">{personalStats.spam_count} Spam</span>, <span className="font-bold text-orange-500">{personalStats.smishing_count} Smishing</span>, and verified <span className="font-bold text-green-500">{personalStats.ham_count} Safe</span> items.
+             </p>
+             
+             {personalStats.most_recent && (
+               <p className="text-xs opacity-60 mt-4 font-bold uppercase tracking-wider">
+                 Last Scan: {new Date(personalStats.most_recent).toLocaleString()}
+               </p>
+             )}
           </div>
         )}
 

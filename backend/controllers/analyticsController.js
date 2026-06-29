@@ -112,8 +112,43 @@ const getBreakdown = async (req, res) => {
   }
 };
 
+// GET /analytics/me
+const getPersonalSummary = async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const stats = await History.aggregate([
+      { $match: { user: userId } },
+      {
+        $group: {
+          _id: null,
+          total_predictions: { $sum: 1 },
+          spam_count: { $sum: { $cond: [{ $eq: ["$prediction", "spam"] }, 1, 0] } },
+          ham_count: { $sum: { $cond: [{ $in: ["$prediction", ["ham", "safe"]] }, 1, 0] } },
+          smishing_count: { $sum: { $cond: [{ $eq: ["$prediction", "smishing"] }, 1, 0] } },
+          most_recent: { $max: "$createdAt" },
+        },
+      },
+    ]);
+
+    const result = stats[0] || {
+      total_predictions: 0,
+      spam_count: 0,
+      ham_count: 0,
+      smishing_count: 0,
+      most_recent: null,
+    };
+
+    res.json(result);
+  } catch (err) {
+    console.error("Personal analytics error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
 module.exports = {
   getSummary,
   getTrends,
   getBreakdown,
+  getPersonalSummary,
 };
+
