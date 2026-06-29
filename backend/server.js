@@ -919,6 +919,16 @@ async function applyRulesToEmails(userId, emails) {
   
   const rules = await Rule.find({ user: userId }).limit(1000).lean();
   
+  const blacklist = new Set();
+  const whitelist = new Set();
+  
+  rules.forEach(r => {
+    if (!r.pattern) return;
+    const pattern = r.pattern.toLowerCase().trim();
+    if (r.type === 'blacklist') blacklist.add(pattern);
+    else if (r.type === 'whitelist') whitelist.add(pattern);
+  });
+  
   let spamCount = 0;
   let safeCount = 0;
   
@@ -948,9 +958,20 @@ async function applyRulesToEmails(userId, emails) {
       possiblePatterns.push(domain);
     }
     
-    const matchingRule = rules.find(r => possiblePatterns.includes(r.pattern.toLowerCase().trim()));
-    if (matchingRule) {
-      const isSpam = matchingRule.type === 'blacklist';
+    let matchedType = null;
+    for (const pattern of possiblePatterns) {
+      if (blacklist.has(pattern)) {
+        matchedType = 'blacklist';
+        break;
+      }
+      if (whitelist.has(pattern)) {
+        matchedType = 'whitelist';
+        break;
+      }
+    }
+    
+    if (matchedType) {
+      const isSpam = matchedType === 'blacklist';
       const updatedPrediction = isSpam ? 'spam' : 'ham';
       
       if (updatedPrediction === 'spam') {
