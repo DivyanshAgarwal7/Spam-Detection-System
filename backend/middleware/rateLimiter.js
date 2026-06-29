@@ -27,6 +27,16 @@ const resetLimiter = rateLimit({
   }
 });
 
+// Throttle PDF export to prevent CPU exhaustion
+const exportLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  message: {
+    success: false,
+    error: "Too many PDF exports. Please wait a minute.",
+  }
+});
+
 // Throttle the analyze/predict endpoint per client IP so a single client can't
 // flood the ML inference service with rapid bursts.
 const PREDICT_WINDOW_MS = Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
@@ -55,6 +65,7 @@ module.exports = {
   registerLimiter,
   resetLimiter,
   predictLimiter,
+  exportLimiter,
   PREDICT_MAX,
   PREDICT_WINDOW_MS,
 };
