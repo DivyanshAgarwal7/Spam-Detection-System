@@ -3,7 +3,7 @@ const Rule = require("../models/Rule");
 // Get all rules for the logged-in user
 const getRules = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = parseInt(req.query.limit) || 100;
     const safeLimit = Math.min(limit, 100);
     const skip = (page - 1) * safeLimit;

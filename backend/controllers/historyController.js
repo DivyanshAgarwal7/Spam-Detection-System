@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 const getHistory = async (req, res) => {
   try {
     //Get pagination parameters from query
-    const page = parseInt(req.query.page) || 1;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = parseInt(req.query.limit) || 10;
     const safeLimit = Math.min(limit, 100); // Limit to 100 items per page
     const skip = (page - 1) * safeLimit;
