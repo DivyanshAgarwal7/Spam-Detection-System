@@ -120,188 +120,277 @@ const fetchHistory = async () => {
     };
 
     return (
-        <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h2 style={{ margin: 0 }}>History</h2>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                    <select
-                        value={sortOrder}
-                        onChange={(e) => setSortOrder(e.target.value)}
-                        style={{
-                            padding: '8px 12px',
-                            borderRadius: '6px',
-                            border: '1px solid #d1d5db',
-                            background: '#f9fafb',
-                            cursor: 'pointer',
-                            fontWeight: '500'
-                        }}
-                    >
-                        <option value="newest">Newest First</option>
-                        <option value="oldest">Oldest First</option>
-                    </select>
-                    <button 
-                        onClick={handleExportCSV}
-                        disabled={history.length === 0}
-                        style={{
-                            background: history.length === 0 ? '#9ca3af' : '#3b82f6',
-                            color: 'white',
-                            padding: '8px 16px',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: history.length === 0 ? 'not-allowed' : 'pointer',
-                            fontWeight: '600'
-                        }}
-                    >
-                        Download CSV
-                    </button>
-                    <button 
-                        onClick={handleExportPDF}
-                        style={{
-                            background: '#10b981',
-                            color: 'white',
-                            padding: '8px 16px',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            fontWeight: '600'
-                        }}
-                    >
-                        Export as PDF
-                    </button>
-                    <button 
-                        onClick={handleClearAll}
-                        disabled={history.length === 0}
-                        style={{
-                            background: history.length === 0 ? '#fca5a5' : '#ef4444',
-                            color: 'white',
-                            padding: '8px 16px',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: history.length === 0 ? 'not-allowed' : 'pointer',
-                            fontWeight: '600'
-                        }}
-                    >
-                        Clear All
-                    </button>
-                </div>
-            </div>
-
-            {selectedItems.length > 0 && (
-                <button
-                    onClick={handleBulkDelete}
+    <div style={{ padding: '20px', maxWidth: '1000px', margin: '0 auto' }}>
+        {/* Header */}
+        <div style={{ 
+            display: 'flex', 
+            flexWrap: 'wrap',
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            marginBottom: '20px',
+            gap: '10px'
+        }}>
+            <h2 style={{ margin: 0 }}>📜 History</h2>
+            <div style={{ 
+                display: 'flex', 
+                flexWrap: 'wrap',
+                gap: '10px',
+                alignItems: 'center'
+            }}>
+                <select
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value)}
                     style={{
-                        background: '#ef4444',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        background: '#f9fafb',
+                        cursor: 'pointer',
+                        fontWeight: '500'
+                    }}
+                >
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                </select>
+                <button 
+                    onClick={handleExportCSV}
+                    disabled={history.length === 0}
+                    style={{
+                        background: history.length === 0 ? '#9ca3af' : '#3b82f6',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+                        fontWeight: '600',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    📥 CSV
+                </button>
+                <button 
+                    onClick={handleExportPDF}
+                    style={{
+                        background: '#10b981',
                         color: 'white',
                         padding: '8px 16px',
                         border: 'none',
                         borderRadius: '6px',
                         cursor: 'pointer',
-                        marginBottom: '10px'
+                        fontWeight: '600',
+                        whiteSpace: 'nowrap'
                     }}
                 >
-                    Delete Selected ({selectedItems.length})
+                    📄 PDF
                 </button>
-            )}
+                <button 
+                    onClick={handleClearAll}
+                    disabled={history.length === 0}
+                    style={{
+                        background: history.length === 0 ? '#fca5a5' : '#ef4444',
+                        color: 'white',
+                        padding: '8px 16px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: history.length === 0 ? 'not-allowed' : 'pointer',
+                        fontWeight: '600',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    🗑️ Clear All
+                </button>
+            </div>
+        </div>
 
-            {isLoading ? (
-                <div style={{ textAlign: 'center', padding: '40px' }}>
-                    <div style={{ 
-                        border: '4px solid #f3f3f3', 
-                        borderTop: '4px solid #3b82f6', 
-                        borderRadius: '50%', 
-                        width: '40px', 
-                        height: '40px', 
-                        animation: 'spin 1s linear infinite', 
-                        margin: '0 auto 16px' 
-                    }} />
-                    <p style={{ color: '#6b7280', fontWeight: '500' }}>Loading history...</p>
-                    <style>
-                        {`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}
-                    </style>
+        {/* Bulk Delete */}
+        {selectedItems.length > 0 && (
+            <button
+                onClick={handleBulkDelete}
+                style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    padding: '8px 16px',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    marginBottom: '10px'
+                }}
+            >
+                Delete Selected ({selectedItems.length})
+            </button>
+        )}
+
+        {/* Loading State */}
+        {isLoading ? (
+            <div style={{ textAlign: 'center', padding: '40px' }}>
+                <div style={{ 
+                    border: '4px solid #f3f3f3', 
+                    borderTop: '4px solid #3b82f6', 
+                    borderRadius: '50%', 
+                    width: '40px', 
+                    height: '40px', 
+                    animation: 'spin 1s linear infinite', 
+                    margin: '0 auto 16px' 
+                }} />
+                <p style={{ color: '#6b7280', fontWeight: '500' }}>Loading history...</p>
+                <style>
+                    {`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}
+                </style>
+            </div>
+        ) : history.length === 0 ? (
+            <div style={{ 
+                textAlign: 'center', 
+                padding: '60px 20px', 
+                background: '#f9fafb', 
+                borderRadius: '12px', 
+                border: '2px dashed #e5e7eb', 
+                marginTop: '20px' 
+            }}>
+                <div style={{ fontSize: '48px', marginBottom: '16px' }}>📦</div>
+                <h3 style={{ margin: '0 0 8px 0', color: '#374151', fontSize: '20px' }}>No scan history yet</h3>
+                <p style={{ margin: '0 0 24px 0', color: '#6b7280', fontSize: '14px' }}>It looks like you haven't scanned any messages or emails.</p>
+                <button 
+                    onClick={() => navigate('/dashboard')}
+                    style={{
+                        background: '#3b82f6',
+                        color: 'white',
+                        padding: '10px 20px',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontWeight: '600',
+                        transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => e.target.style.background = '#2563eb'}
+                    onMouseOut={(e) => e.target.style.background = '#3b82f6'}
+                >
+                    Go to Dashboard
+                </button>
+            </div>
+        ) : (
+            /* History List - FIXED CSS */
+            <div style={{ 
+                border: '1px solid #e5e7eb', 
+                borderRadius: '12px', 
+                overflow: 'hidden',
+                background: 'white'
+            }}>
+                {/* Header Row */}
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '40px 1fr 120px 100px',
+                    gap: '10px',
+                    padding: '12px 16px',
+                    background: '#f3f4f6',
+                    borderBottom: '1px solid #e5e7eb',
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    color: '#374151'
+                }}>
+                    <span></span>
+                    <span>Message</span>
+                    <span>Confidence</span>
+                    <span>Result</span>
                 </div>
-            ) : history.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '60px 20px', background: '#f9fafb', borderRadius: '12px', border: '2px dashed #e5e7eb', marginTop: '20px' }}>
-                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>📦</div>
-                    <h3 style={{ margin: '0 0 8px 0', color: '#374151', fontSize: '20px' }}>No scan history yet</h3>
-                    <p style={{ margin: '0 0 24px 0', color: '#6b7280', fontSize: '14px' }}>It looks like you haven't scanned any messages or emails.</p>
-                    <button 
-                        onClick={() => navigate('/dashboard')}
-                        style={{
-                            background: '#3b82f6',
-                            color: 'white',
-                            padding: '10px 20px',
-                            border: 'none',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            fontWeight: '600',
-                            transition: 'all 0.2s'
-                        }}
-                        onMouseOver={(e) => e.target.style.background = '#2563eb'}
-                        onMouseOut={(e) => e.target.style.background = '#3b82f6'}
-                    >
-                        Go to Dashboard
-                    </button>
-                </div>
-            ) : (
-                sortedHistory.map(item => (
+
+                {/* History Items */}
+                {sortedHistory.map(item => (
                     <div
                         key={item._id}
                         style={{
-                            display: 'flex',
-                            alignItems: 'center',
+                            display: 'grid',
+                            gridTemplateColumns: '40px 1fr 120px 100px',
                             gap: '10px',
-                            padding: '10px 0',
-                            borderBottom: '1px solid #e5e7eb'
+                            padding: '12px 16px',
+                            borderBottom: '1px solid #e5e7eb',
+                            alignItems: 'center',
+                            transition: 'background 0.2s'
                         }}
+                        onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'}
+                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
                     >
+                        {/* Checkbox */}
                         <input
                             type="checkbox"
                             checked={selectedItems.includes(item._id)}
                             onChange={() => toggleSelect(item._id)}
+                            style={{ width: '16px', height: '16px', cursor: 'pointer' }}
                         />
-                        <span style={{ flex: 1 }}>{escapeHTML(item.query)}</span>
-                        {item.confidence != null && (
-                            <div style={{ display: 'flex', alignItems: 'center', width: '120px', marginRight: '10px' }}>
-                                <div style={{ 
-                                    flex: 1, 
-                                    height: '6px', 
-                                    background: '#e5e7eb', 
-                                    borderRadius: '3px',
-                                    overflow: 'hidden',
-                                    marginRight: '8px'
-                                }}>
-                                    <div style={{
-                                        height: '100%',
-                                        width: `${Math.min(item.confidence * 50 + 50, 100)}%`,
-                                        background: item.prediction === 'spam' || item.prediction === 'malicious' 
-                                            ? '#ef4444' 
-                                            : item.prediction === 'smishing' 
-                                                ? '#f97316' 
-                                                : '#22c55e'
-                                    }} />
-                                </div>
-                                <span style={{ fontSize: '11px', color: '#6b7280', fontWeight: '500', width: '30px', textAlign: 'right' }}>
-                                    {Math.min(item.confidence * 50 + 50, 100).toFixed(0)}%
-                                </span>
+
+                        {/* Message - with word wrap */}
+                        <div style={{ 
+                            overflow: 'hidden',
+                            wordBreak: 'break-word'
+                        }}>
+                            <span style={{ fontSize: '14px', color: '#1f2937' }}>
+                                {escapeHTML(item.query)}
+                            </span>
+                            <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px' }}>
+                                {item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}
                             </div>
-                        )}
+                        </div>
+
+                        {/* Confidence Bar */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ 
+                                flex: 1, 
+                                height: '6px', 
+                                background: '#e5e7eb', 
+                                borderRadius: '3px',
+                                overflow: 'hidden',
+                                minWidth: '50px'
+                            }}>
+                                <div style={{
+                                    height: '100%',
+                                    width: `${Math.min(item.confidence * 50 + 50, 100)}%`,
+                                    background: item.prediction === 'spam' || item.prediction === 'malicious' 
+                                        ? '#ef4444' 
+                                        : item.prediction === 'smishing' 
+                                            ? '#f97316' 
+                                            : '#22c55e',
+                                    transition: 'width 0.5s ease'
+                                }} />
+                            </div>
+                            <span style={{ 
+                                fontSize: '11px', 
+                                color: '#6b7280', 
+                                fontWeight: '500',
+                                minWidth: '35px',
+                                textAlign: 'right'
+                            }}>
+                                {item.confidence ? Math.min(item.confidence * 50 + 50, 100).toFixed(0) : 0}%
+                            </span>
+                        </div>
+
+                        {/* Badge */}
                         <span
                             style={{
-                                padding: '2px 10px',
-                                borderRadius: '12px',
+                                padding: '4px 12px',
+                                borderRadius: '20px',
                                 fontSize: '12px',
                                 fontWeight: '600',
-                                background: item.prediction === 'spam' ? '#fee2e2' : '#dcfce7',
-                                color: item.prediction === 'spam' ? '#dc2626' : '#16a34a'
+                                textAlign: 'center',
+                                display: 'inline-block',
+                                whiteSpace: 'nowrap',
+                                background: item.prediction === 'spam' || item.prediction === 'malicious'
+                                    ? '#fee2e2'
+                                    : item.prediction === 'smishing'
+                                    ? '#ffedd5'
+                                    : '#dcfce7',
+                                color: item.prediction === 'spam' || item.prediction === 'malicious'
+                                    ? '#dc2626'
+                                    : item.prediction === 'smishing'
+                                    ? '#ea580c'
+                                    : '#16a34a'
                             }}
                         >
                             {item.prediction}
                         </span>
                     </div>
-                ))
-            )}
-        </div>
-    );
-};
+                ))}
+            </div>
+        )}
+    </div>
+);
 
 export default History;
