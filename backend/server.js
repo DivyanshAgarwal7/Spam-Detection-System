@@ -40,6 +40,7 @@ const mongoose = require("mongoose");
 
 const History = require("./models/History");
 const Rule = require("./models/Rule");
+const { matchKeywordRule } = require("./utils/keywordRules");
 
 const multer = require("multer");
 const displayBanner = require('./utils/banner');
@@ -321,6 +322,7 @@ app.post("/predict", predictLimiter, protect, async (req, res) => {
 
       const rule = await Rule.findOne({
         user: req.user.id,
+        ruleCategory: { $ne: 'keyword' },
         pattern: { $in: possiblePatterns }
       });
 
@@ -352,6 +354,43 @@ app.post("/predict", predictLimiter, protect, async (req, res) => {
           rule_applied: rule.type
         });
       }
+    }
+
+    // Check keyword/phrase rules against the message content before falling
+    // back to the ML model. A whitelisted phrase overrides a spam-looking
+    // message; a blacklisted phrase flags it as spam.
+    const keywordRules = await Rule.find({
+      user: req.user.id,
+      ruleCategory: 'keyword',
+    }).limit(1000).lean();
+
+    const keywordMatch = matchKeywordRule(text, keywordRules);
+    if (keywordMatch) {
+      const isSpam = keywordMatch.type === 'blacklist';
+      const prediction = isSpam ? "spam" : "ham";
+
+      try {
+        await History.create({
+          user: req.user.id,
+          query: text,
+          prediction: prediction,
+          type: type,
+          confidence: 1.0,
+        });
+      } catch (historyError) {
+        console.error("Failed to save history for keyword rule match:", historyError.message);
+      }
+
+      console.log(`Keyword rule match found (${keywordMatch.type}):`, keywordMatch.pattern);
+      return res.json({
+        input: text,
+        prediction: prediction,
+        confidence: 1.0,
+        confidence_level: "high",
+        level_color: isSpam ? "red" : "green",
+        level_emoji: isSpam ? "🔴" : "🟢",
+        rule_applied: keywordMatch.type,
+      });
     }
 
     console.log("Calling Flask...");
