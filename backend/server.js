@@ -788,50 +788,6 @@ app.get("/gmail/connect", protect, async (req, res) => {
   }
 });
 
-// ==== SPAM WORD OF THE DAY ====
-const spamWords={};
-
-//Track spam word when saving history
-//In the /predict endpoint, after saving history:
-if(response.data.prediction === 'spam'){
-  const words = text.toLowerCase().match(/[a-z]+/g) || [];
-    words.forEach(word => {
-        if (word.length > 2) {
-            spamWords[word] = (spamWords[word] || 0) + 1;
-        }
-    });
-    // Save to file/database
-    saveSpamWords(spamWords);
-}
-
-//Get word of the day
-app.get('api/spam-word-of-the-day',async(req,res)=> {
-  try {
-        const words = await getSpamWords();
-        const sorted = Object.entries(words).sort((a,b) => b[1] - a[1]);
-        const topWord = sorted.length > 0 ? sorted[0][0] : 'prize';
-        
-        const definitions = {
-            'free': 'Scammers use "free" to lure victims with offers that seem too good to be true.',
-            'win': 'Claiming you won something you never entered is a common phishing tactic.',
-            'prize': 'Urgent claims about winning a prize are designed to make you act without thinking.',
-            'click': 'Malicious links are often hidden behind "click here" calls to action.',
-            'urgent': 'Creating false urgency pressures victims to act before thinking critically.',
-            'verify': 'Scammers ask you to "verify" sensitive information to steal your identity.',
-            'limited': 'False scarcity ("limited time") is used to pressure you into quick decisions.',
-            'congratulations': 'Scammers use congratulations to make you feel special before asking for personal info.'
-        };
-        res.json({
-          success:true,
-          word:topWord,
-          count: sorted.length > 0 ? sorted[0][1] : 0,
-          definition: definitions[topWord] || 'Commonly used in spam messages',
-          context: `"${topWord}" appears in the spam messages ${sorted.length > 0 ? sorted[0][1] : 0} times.`
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 // Protected: Get latest Gmail emails
 app.get("/gmail/emails", protect, async (req, res) => {
@@ -1120,7 +1076,7 @@ app.post("/imap/connect", protect, async (req, res) => {
 });
 
 // ========================================
-// ERROR HANDLERS (ONLY ONCE!)
+// ERROR HANDLERS
 // ========================================
 
 app.use((err, req, res, next) => {
@@ -1144,13 +1100,13 @@ const PORT = config.port;
 const server = app.listen(PORT, () => {
   displayBanner();
   const totalTime = Date.now() - SERVER_START_TIME;
-  displayBanner();
   console.log(`⏱️ Total startup time: ${totalTime}ms`);
+});
+
 // ====== PREDICTION STATISTICS ======
 app.get('/api/stats', protect, async (req, res) => {
     try {
         const userId = req.user.id;
-        
         const total = await History.countDocuments({ user: userId });
         const spam = await History.countDocuments({ user: userId, prediction: 'spam' });
         const ham = await History.countDocuments({ user: userId, prediction: 'ham' });
@@ -1165,7 +1121,6 @@ app.get('/api/stats', protect, async (req, res) => {
             { $limit: 7 }
         ]);
         
-        // Get accuracy if feedback exists
         const feedbackCount = await History.countDocuments({ 
             user: userId, 
             feedback: { $exists: true } 
@@ -1338,7 +1293,6 @@ app.get("/imap/scan-results", protect, async (req, res) => {
     res.status(500).json({ error: "Something went wrong" });
   }
 });
-});
 
 // ===== SEARCH HISTORY =====
 app.get('/api/history/search',protect, async(req,res) => {
@@ -1387,17 +1341,6 @@ app.get('/api/history/search',protect, async(req,res) => {
         });
     }
 });
-// ========================================
-// START SERVER
-// ========================================
-
-// const PORT = config.port;
-// const server = app.listen(PORT, () => {
-//   const totalTime = Date.now() - SERVER_START_TIME;
-//   displayBanner();
-//   console.log(`⏱️ Total startup time: ${totalTime}ms`);
-// });
-// Listen for termination signals
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 

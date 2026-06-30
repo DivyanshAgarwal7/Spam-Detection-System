@@ -12,6 +12,8 @@ import FeedbackWidget from "../components/FeedbackWidget";
 import Login from "./Login.jsx";
 import confetti from 'canvas-confetti';
 import Register from "./Register.jsx";
+import Skeleton from 'react-loading-skeleton';
+import 'react-loading-skeleton/dist/skeleton.css';
 import EmailHeaderAnalyzer from "../components/EmailHeaderAnalyzer";
 import BulkSpamDetection from "../components/BulkSpamDetection";
 import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
@@ -26,11 +28,17 @@ function App() {
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
   const [confidence, setConfidence] = useState(null);
+  const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [type, setType] = useState("message");
   const [errorInfo, setErrorInfo] = useState(null);
   const [wordOfDay, setWordOfDay] = useState(null);
   const [wordLoading, setWordLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [hasCelebrated, setHasCelebrated] = useState(() => {
+    return localStorage.getItem("firstPrediction") === "true";
+  });
+  const [showCelebration, setShowCelebration] = useState(false);
 
   const [darkMode, setDarkMode] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -46,7 +54,49 @@ function App() {
     return "detector";
   });
 
-  const { user, logout } = useAuth();
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  const playSpamSound = () => {
+    if (!soundEnabled) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.15].forEach((delay) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 600;
+        osc.type = "square";
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + delay + 0.15);
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + 0.15);
+      });
+    } catch (e) {
+      /* silent fail */
+    }
+  };
+
+  const playHamSound = () => {
+    if (!soundEnabled) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [523, 659, 784].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = freq;
+        osc.type = 'sine';
+        gain.gain.setValueAtTime(0.2, ctx.currentTime + i * 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + i * 0.12 + 0.15);
+        osc.start(ctx.currentTime + i * 0.12);
+        osc.stop(ctx.currentTime + i * 0.12 + 0.15);
+      });
+    } catch (e) { /* silent fail */ }
+  };
+
+  const { user, login, logout } = useAuth();
   const handleLogout = () => {
     logout();
     localStorage.removeItem("user");
@@ -62,6 +112,32 @@ function App() {
     activeTheme,
     THEME_PALETTES,
   } = useTheme();
+
+  const detectType = (text) => {
+    if (!text || text.trim().length === 0) return "message";
+    const trimmed = text.trim();
+    if (trimmed.includes("http://") || trimmed.includes("https://")) return "url";
+    if (trimmed.includes("@") && trimmed.includes(".")) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (emailRegex.test(trimmed)) return "email";
+    }
+    if (trimmed.length < 160 && !trimmed.includes("\n")) return "sms";
+    return "message";
+  };
+
+  const calculateReadingTime = (text) => {
+    if (!text || text.trim().length === 0) return '0 sec read';
+    const wordCount = text.trim().split(/\s+/).length;
+    const readingTimeMinutes = wordCount / 200;
+    if (readingTimeMinutes < 1) {
+      const seconds = Math.round(readingTimeMinutes * 60);
+      return `${seconds} sec read`;
+    } else if (readingTimeMinutes < 2) {
+      return '1 min read';
+    } else {
+      return `${Math.round(readingTimeMinutes)} min read`;
+    }
+  };
 
   const fetchWordOfTheDay = async () => {
     try {
@@ -80,13 +156,18 @@ function App() {
   }, []);
 
   const handlePredict = async () => {
-    if (!text) return;
+    if (!text || text.trim().length === 0) return;
     try {
       setLoading(true);
       const res = await api.post(`${import.meta.env.VITE_API_URI}/predict`, {
         text: text,
         type: type,
       });
+      if (!hasCelebrated) {
+        triggerConfetti();
+        setHasCelebrated(true);
+        localStorage.setItem('firstPrediction', 'true');
+      }
       setResult(res.data.prediction);
       setConfidence(res.data.confidence ?? null);
       setErrorInfo(null);
@@ -102,42 +183,46 @@ function App() {
     }
   };
 
-  const getColor = () => {
-    if (result === "ham" || result === "safe")
-      return "text-green-600 dark:text-green-400";
-    if (result === "spam" || result === "malicious")
-      return "text-red-600 dark:text-red-400";
-    if (result === "smishing") return "text-orange-600 dark:text-orange-400";
-    if (result === "Error") {
-      return isDark ? "text-yellow-300" : "text-yellow-700";
-    }
-    return isDark ? "text-slate-300" : "text-slate-600";
-  };
+  if (result === 'spam' || result === 'malicious') {
+    playSpamSound();
+  } else if (result === 'ham' || result === 'safe') {
+    playHamSound();
+  }
 
-  const getBg = () => {
-    if (result === "ham" || result === "safe")
-      return "bg-green-500/15 border border-green-500/35";
-    if (result === "spam" || result === "malicious")
-      return "bg-red-500/15 border border-red-500/35";
-    if (result === "smishing")
-      return "bg-orange-500/15 border border-orange-500/35";
-    return "bg-slate-500/15 border border-slate-500/35";
+  const triggerConfetti = () => {
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    setTimeout(() => {
+      confetti({ particleCount: 50, spread: 50, origin: { y: 0.6, x: 0.3 } });
+    }, 200);
+    setTimeout(() => {
+      confetti({ particleCount: 50, spread: 50, origin: { y: 0.6, x: 0.7 } });
+    }, 400);
+    setTimeout(() => {
+      setShowCelebration(true);
+    }, 500);
   };
 
   const confidencePct = confidence !== null ? Math.min(confidence * 50 + 50, 100).toFixed(1) : "0.0";
   const confidenceValue = Number(confidencePct);
-
-  const riskLevel =
-    confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
+  const riskLevel = confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
 
   return (
-    <div
-      className={`min-h-screen flex items-center justify-center px-4 py-8 pb-32 transition-all duration-500 ${
-        isDark ? activeTheme.dark : activeTheme.light
-      }`}
-    >
+    <div className={`min-h-screen flex flex-col items-center px-4 py-8 pb-32 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light}`}>
       {/* Top Controls */}
       <div className="absolute top-4 right-4 flex gap-3 flex-wrap justify-end">
+        <InstallAppButton />
+        <button
+          onClick={() => setThemeMode(isDark ? 'light' : 'dark')}
+          className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
+          style={{
+            background: isDark ? '#fbbf24' : '#1e293b',
+            color: isDark ? '#1e293b' : '#fbbf24',
+            border: 'none',
+            cursor: 'pointer'
+          }}
+        >
+          {isDark ? '☀️' : '🌙'}
+        </button>
         <InstallAppButton />
         <button
           onClick={() => setShowSettings(!showSettings)}
@@ -145,7 +230,6 @@ function App() {
         >
           ⚙️ Customize Theme
         </button>
-
         <button
           onClick={handleLogout}
           className="px-4 py-2.5 rounded-xl font-bold bg-red-650 hover:bg-red-600 text-white transition-all active:scale-95 shadow-md"
@@ -154,15 +238,52 @@ function App() {
         </button>
       </div>
 
-      <div className="absolute top-4 left-4">
-        <span
-          className={`text-sm font-semibold px-4 py-2 rounded-full shadow-sm backdrop-blur-md ${
-            isDark
-              ? "bg-slate-800/80 text-slate-200 border border-slate-700/50"
-              : "bg-white/30 text-slate-850 border border-white/20"
-          }`}
-        >
-          👤 {user?.username}
+      <button
+        onClick={() => setSoundEnabled(!soundEnabled)}
+        className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
+        style={{
+          background: isDark ? '#1e293b' : '#e2e8f0',
+          color: isDark ? '#e4e4e4' : '#1e293b',
+          border: 'none',
+          cursor: 'pointer'
+        }}
+      >
+        {soundEnabled ? '🔊' : '🔇'}
+      </button>
+
+      <div className="absolute top-4 left-4 flex items-center gap-3">
+        <label className="cursor-pointer relative group">
+          {user?.avatarUrl ? (
+            <img src={user.avatarUrl} alt="Avatar" className="w-10 h-10 rounded-full border-2 border-slate-300 object-cover shadow-sm" />
+          ) : (
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shadow-sm border ${isDark ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}>👤</div>
+          )}
+          <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <span className="text-[10px] text-white font-bold uppercase tracking-wider">Edit</span>
+          </div>
+          <input type="file" className="hidden" accept="image/*" onChange={async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('avatar', file);
+            try {
+              const token = localStorage.getItem('token');
+              const res = await api.post(`${import.meta.env.VITE_API_URI || ''}/api/v1/auth/avatar`, formData, {
+                headers: {
+                  'Content-Type': 'multipart/form-data',
+                  Authorization: `Bearer ${token}`
+                }
+              });
+              localStorage.setItem('user', JSON.stringify(res.data.user));
+              login(res.data.user);
+              window.location.reload();
+            } catch (err) {
+              alert('Failed to upload avatar: ' + (err.response?.data?.error || err.message));
+            }
+          }} />
+        </label>
+        <span className={`text-sm font-semibold px-4 py-2 rounded-full shadow-sm backdrop-blur-md ${isDark ? "bg-slate-800/80 text-slate-200 border border-slate-700/50" : "bg-white/30 text-slate-850 border border-white/20"}`}>
+          {user?.username}
         </span>
       </div>
 
@@ -181,9 +302,7 @@ function App() {
             </div>
 
             <div className="mb-6">
-              <label className="block text-sm font-semibold mb-3">
-                Theme Mode
-              </label>
+              <label className="block text-sm font-semibold mb-3">Theme Mode</label>
               <div className="grid grid-cols-3 gap-2">
                 {[
                   { mode: "light", label: "☀️ Light" },
@@ -202,9 +321,7 @@ function App() {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold mb-3">
-                Color Accent
-              </label>
+              <label className="block text-sm font-semibold mb-3">Color Accent</label>
               <div className="flex flex-col gap-2">
                 {Object.entries(THEME_PALETTES).map(([key, value]) => (
                   <button
@@ -230,250 +347,136 @@ function App() {
       )}
 
       {/* Main card */}
-      <div
-        className={`w-full max-w-lg backdrop-blur-xl border rounded-3xl shadow-2xl p-6 sm:p-8 text-center transition-all duration-500 ${
-          isDark
-            ? "bg-slate-950/40 border-slate-750"
-            : "bg-white/20 border-white/20"
-        }`}
-      >
-        <div
-          className={`w-full max-w-md rounded-2xl shadow-3xl p-6 sm:p-8 text-center mx-auto transition-all duration-500 ${
-            isDark
-              ? activeTheme.cardDark
-              : `${activeTheme.card} backdrop-blur-md`
-          }`}
-        >
-          <h1 className="text-3xl font-extrabold mb-2 tracking-tight">
-            📨 Spam Detector
-          </h1>
-          <p className="font-semibold text-sm mb-6 opacity-75">
-            Analyze messages, emails & URLs instantly
-          </p>
+      <div className="flex-1 flex items-center justify-center w-full">
+        <div className={`w-full max-w-lg backdrop-blur-xl border rounded-3xl shadow-2xl p-6 sm:p-8 text-center transition-all duration-500 ${isDark ? "bg-slate-950/40 border-slate-750" : "bg-white/20 border-white/20"}`}>
+          <div className={`w-full max-w-md rounded-2xl shadow-3xl p-6 sm:p-8 text-center mx-auto transition-all duration-500 ${isDark ? activeTheme.cardDark : `${activeTheme.card} backdrop-blur-md`}`}>
+            <h1 className="text-3xl font-extrabold mb-2 tracking-tight">
+              📨 Spam Detector
+            </h1>
+            <p className="font-semibold text-sm mb-6 opacity-75">
+              Analyze messages, emails & URLs instantly
+            </p>
 
-          {/* Navigation Tabs */}
-          <div className="flex flex-wrap justify-center gap-2 mb-6 border-b border-slate-500/20 pb-3 text-sm font-bold">
-            <button
-              onClick={() => setActiveTab("detector")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "detector"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Spam Detector
-            </button>
-            <button
-              onClick={() => setActiveTab("bulk")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "bulk"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Bulk Detector
-            </button>
-            <button
-              onClick={() => setActiveTab("insights")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "insights"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Insights
-            </button>
-            <button
-              onClick={() => setActiveTab("authenticity")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "authenticity"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Sender Verifier
-            </button>
-            <button
-              onClick={() => setActiveTab("scanner")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "scanner"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Email Scanner
-            </button>
-            <button
-              onClick={() => setActiveTab("rules")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "rules"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              Rules Manager
-            </button>
-            <button
-              onClick={() => setActiveTab("history")}
-              className={`pb-1 px-4 transition-all border-b-2 ${
-                activeTab === "history"
-                  ? "border-current opacity-100"
-                  : "border-transparent opacity-50 hover:opacity-75"
-              }`}
-            >
-              History
-            </button>
-            <button
-              onClick={() => navigate("/dashboard")}
-              className="pb-1 px-4 transition-all border-b-2 border-transparent opacity-50 hover:opacity-75"
-            >
-              <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                <span>📊</span>
-                <span>Dashboard</span>
-              </span>
-            </button>
-          </div>
-
-          {activeTab === "detector" ? (
-            <>
-              {/* Enhanced Input Section */}
-              <div className="relative w-full mb-4 group text-left">
-                <textarea
-                  className={`w-full border p-4 pr-12 rounded-2xl focus:outline-none focus:ring-2 resize-none text-sm sm:text-base transition-all shadow-inner leading-relaxed
-                    [&::-webkit-scrollbar]:w-2
-                    [&::-webkit-scrollbar-track]:bg-transparent
-                    [&::-webkit-scrollbar-thumb]:rounded-full
-                    ${
-                      isDark
-                        ? `${activeTheme.inputDark} focus:border-blue-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-700 hover:[&::-webkit-scrollbar-thumb]:bg-slate-600`
-                        : `${activeTheme.input} focus:border-indigo-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400`
-                    }`}
-                  rows="5"
-                  placeholder={
-                    type === "url"
-                      ? "Paste or type the suspicious website link URL here to test..."
-                      : type === "message"
-                        ? "Type your SMS or chat message content here for inspection..."
-                        : "Paste the full text or body of your email content here..."
-                  }
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                />
-
-                {text && (
-                  <button
-                    onClick={() => setText("")}
-                    className={`absolute top-3.5 right-3.5 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all hover:scale-110 shadow-sm ${
-                      isDark
-                        ? "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
-                        : "bg-slate-200 text-slate-500 hover:bg-slate-300 hover:text-slate-800"
-                    }`}
-                    title="Clear input"
-                  >
-                    ✕
-                  </button>
-                )}
-
-                <div className="flex justify-end items-center mt-1.5 px-1 text-xs font-medium tracking-wide opacity-70">
-                  <span className={text.length > 500 ? "text-orange-500" : ""}>
-                    {text.length.toLocaleString()} characters
-                  </span>
-                </div>
-              </div>
-
+            {/* Navigation Tabs */}
+            <div className="flex flex-wrap justify-center gap-2 mb-6 border-b border-slate-500/20 pb-3 text-sm font-bold">
               <button
-                onClick={handlePredict}
-                disabled={loading}
-                className={`mt-2 w-full py-3.5 rounded-xl font-bold text-white shadow-md active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${activeTheme.accent}`}
+                onClick={() => setActiveTab("detector")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "detector" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
               >
-                {loading && (
-                  <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                )}
-                {loading
-                  ? "Analyzing..."
-                  : `Analyze ${type === "url" ? "URL" : type}`}
+                Spam Detector
               </button>
+              <button
+                onClick={() => setActiveTab("bulk")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "bulk" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                Bulk Detector
+              </button>
+              <button
+                onClick={() => setActiveTab("insights")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "insights" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                Insights
+              </button>
+              <button
+                onClick={() => setActiveTab("authenticity")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "authenticity" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                Sender Verifier
+              </button>
+              <button
+                onClick={() => setActiveTab("scanner")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "scanner" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                Email Scanner
+              </button>
+              <button
+                onClick={() => setActiveTab("rules")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "rules" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                Rules Manager
+              </button>
+              <button
+                onClick={() => setActiveTab("history")}
+                className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "history" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
+              >
+                History
+              </button>
+              <button
+                onClick={() => navigate("/dashboard")}
+                className="pb-1 px-4 transition-all border-b-2 border-transparent opacity-50 hover:opacity-75"
+              >
+                <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                  <span>📊</span>
+                  <span>Dashboard</span>
+                </span>
+              </button>
+            </div>
 
-              {result && (
-                <div
-                  className={`mt-5 rounded-3xl p-5 shadow-lg border ${
-                    isDark
-                      ? "bg-slate-900/50 border-slate-700"
-                      : "bg-white/70 border-slate-200"
-                  }`}
-                >
-                  <div className="flex justify-between items-center mb-5">
-                    <h2 className="text-lg font-bold">📊 Analysis Result</h2>
-                    <span
-                      className={`px-4 py-2 rounded-full text-sm font-bold ${
-                        result === "ham" || result === "safe"
-                          ? "bg-green-500 text-white"
-                          : result === "spam" || result === "malicious"
-                            ? "bg-red-500 text-white"
-                            : result === "smishing"
-                              ? "bg-orange-500 text-white"
-                              : "bg-yellow-500 text-white"
-                      }`}
+            {activeTab === "detector" ? (
+              <>
+                {/* Enhanced Input Section */}
+                <div className="relative w-full mb-4 group text-left">
+                  <textarea
+                    className={`w-full border p-4 pr-12 rounded-2xl focus:outline-none focus:ring-2 resize-none text-sm sm:text-base transition-all shadow-inner leading-relaxed [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full ${isDark ? `${activeTheme.inputDark} focus:border-blue-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-700 hover:[&::-webkit-scrollbar-thumb]:bg-slate-600` : `${activeTheme.input} focus:border-indigo-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400`}`}
+                    rows="5"
+                    placeholder={type === "url" ? "Paste or type the suspicious website link URL here to test..." : type === "message" ? "Type your SMS or chat message content here for inspection..." : "Paste the full text or body of your email content here..."}
+                    value={text}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setText(value);
+                      const detected = detectType(value);
+                      setType(detected);
+                    }}
+                  />
+
+                  {text && (
+                    <button
+                      onClick={() => setText("")}
+                      className={`absolute top-3.5 right-3.5 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all hover:scale-110 shadow-sm ${isDark ? "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white" : "bg-slate-200 text-slate-500 hover:bg-slate-300 hover:text-slate-800"}`}
+                      title="Clear input"
                     >
-                      {result === "ham" && "✅ Safe"}
-                      {result === "safe" && "✅ Safe"}
-                      {result === "spam" && "🚫 Spam"}
-                      {result === "malicious" && "🚨 Malicious"}
-                      {result === "smishing" && "⚠️ Fraud"}
-                      {result === "Error" && "⚠️ Error"}
-                    </span>
-                  </div>
+                      ✕
+                    </button>
+                  )}
 
-                  {confidence !== null && result !== "Error" && (
-                    <>
-                      <p className="text-sm opacity-70 mb-1">Confidence Score</p>
-                      <h3 className="text-3xl font-bold mb-4">{confidencePct}%</h3>
-                      <div
-                        className={`w-full rounded-full h-3 mb-5 ${
-                          isDark ? "bg-slate-700" : "bg-slate-200"
-                        }`}
-                      />
-                    </>
+                  <div className="flex justify-between items-center mt-1.5 px-1 text-xs font-medium tracking-wide opacity-70">
+                    <span>📖 {calculateReadingTime(text)}</span>
+                    {text.length > 5000 ? (
+                      <span className="text-red-500 font-bold">{text.length.toLocaleString()} / 5000 characters (Limit exceeded)</span>
+                    ) : (
+                      <span className={text.length > 500 ? "text-orange-500" : ""}>{text.length.toLocaleString()} characters</span>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (!text.trim()) return;
+                    handlePredict();
+                  }}
+                  disabled={loading || text.trim().length === 0 || text.length > 5000}
+                  className={`mt-2 w-full py-3.5 rounded-xl font-bold text-white shadow-md active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${activeTheme.accent}`}
+                >
+                  {loading && (
+                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
                   )}
                   {loading ? "Analyzing..." : `Analyze ${type === "url" ? "URL" : type}`}
                 </button>
 
-                {/* Results Section */}
-                {/* 🚀 Tailwind Skeleton Loader */}
-                {loading ? (
-                  <div className={`mt-5 rounded-3xl p-5 shadow-lg border w-full animate-pulse text-left ${isDark ? "bg-slate-900/50 border-slate-700" : "bg-white/70 border-slate-200"}`}>
-                    {/* Header Placeholder */}
-                    <div className="flex justify-between items-center mb-5">
-                      <div className={`h-6 w-40 rounded-lg ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                      <div className={`h-8 w-24 rounded-full ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                    </div>
-
-                    {/* Confidence Score Placeholder */}
-                    <div className={`h-4 w-32 rounded mb-3 ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                    <div className={`h-8 w-20 rounded mb-4 ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                    <div className={`w-full rounded-full h-3 mb-6 ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-
-                    {/* Explanation Mock Placeholder */}
-                    <div className={`mt-4 p-5 rounded-3xl border ${isDark ? "bg-slate-800/60 border-slate-700" : "bg-slate-50 border-slate-200"}`}>
-                      <div className="flex justify-between mb-4">
-                        <div className={`h-5 w-48 rounded ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                        <div className={`h-8 w-16 rounded ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2 mb-4">
-                        <div className={`h-24 rounded-2xl ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                        <div className={`h-24 rounded-2xl ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                      </div>
-                      <div className={`h-4 w-1/4 rounded mb-3 ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                      <div className={`h-3 w-3/4 rounded mb-2 ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                      <div className={`h-3 w-1/2 rounded ${isDark ? "bg-slate-700" : "bg-slate-200"}`}></div>
-                    </div>
+                {loading && (
+                <div className="mt-5 p-4">
+                  <Skeleton height={200} borderRadius="16px" />
+                  <div className="mt-4">
+                    <Skeleton height={20} width="60%" />
+                    <Skeleton height={30} width="40%" />
+                    <Skeleton height={10} />
                   </div>
-                ) : result && (
-               {/* Results Section */}
-                {result && (
+                </div>
+                )}
+
                 {/* Error Section */}
                 {result === "Error" && errorInfo && (
                   <div className={`mt-5 rounded-3xl p-5 shadow-lg border ${isDark ? "bg-yellow-500/10 border-yellow-600/40" : "bg-yellow-50 border-yellow-300"}`}>
@@ -500,148 +503,205 @@ function App() {
                   </div>
                 )}
 
-                  {result && confidence !== null && result !== "Error" && (
-                    <div className="mt-4 text-left">
-                      <p className="text-xs font-semibold mb-1 opacity-70">
-                        Model Confidence: {confidencePct}%
-                      </p>
-                      <div
-                        className={`w-full rounded-full h-2 ${isDark ? "bg-slate-800" : "bg-slate-200"}`}
-                      >
-                        <div
-                          className={`h-3 rounded-full transition-all duration-500 ${
-                            result === "ham" || result === "safe"
-                              ? "bg-green-500"
-                              : result === "spam" || result === "malicious"
-                                ? "bg-red-500"
-                                : "bg-orange-500"
-                          }`}
-                          style={{
-                            width: `${confidencePct}%`,
+                {/* Results Section */}
+                {result && result !== "Error" && (
+                  <div className={`mt-5 rounded-3xl p-5 shadow-lg border ${isDark ? "bg-slate-900/50 border-slate-700" : "bg-white/70 border-slate-200"}`}>
+                    <div className="flex justify-between items-center mb-5">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-lg font-bold">📊 Analysis Result</h2>
+                        <button
+                          onClick={() => {
+                            const scoreStr = confidence !== null ? ` | Confidence: ${confidencePct}%` : "";
+                            const copyText = `Prediction: ${result === 'ham' || result === 'safe' ? 'Safe' : result === 'spam' || result === 'malicious' ? 'Spam/Malicious' : result === 'smishing' ? 'Fraud' : result}${scoreStr}`;
+                            navigator.clipboard.writeText(copyText);
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 2000);
                           }}
-                        />
-                      </div>
-
-                      <div className="mb-5">
-                        <p className="text-sm opacity-70 mb-2">Risk Level</p>
-                        <span
-                          className={`px-4 py-2 rounded-full text-sm font-semibold ${
-                            riskLevel === "Low"
-                              ? "bg-green-100 text-green-700"
-                              : riskLevel === "Medium"
-                                ? "bg-yellow-100 text-yellow-700"
-                                : "bg-red-100 text-red-700"
-                          }`}
+                          className={`ml-1 w-7 h-7 flex items-center justify-center rounded-full transition-all text-[11px] ${isDark ? "hover:bg-slate-700 bg-slate-800 text-slate-300" : "hover:bg-slate-200 bg-slate-100 text-slate-600"}`}
+                          title="Copy Result to Clipboard"
                         >
-                          {riskLevel === "Low" && "🟢 Low"}
-                          {riskLevel === "Medium" && "🟠 Medium"}
-                          {riskLevel === "High" && "🔴 High"}
-                        </span>
+                          {copied ? "✅" : "📋"}
+                        </button>
                       </div>
-
-                      <p className="text-sm opacity-75 leading-relaxed">
-                        {(result === "spam" ||
-                          result === "smishing" ||
-                          result === "malicious") &&
-                          "This content contains characteristics commonly found in spam, phishing, or malicious attacks."}
-                        {(result === "ham" || result === "safe") &&
-                          "No suspicious patterns were detected in this content."}
-                      </p>
+                      <span className={`px-4 py-2 rounded-full text-sm font-bold ${result === "ham" || result === "safe" ? "bg-green-500 text-white" : result === "spam" || result === "malicious" ? "bg-red-500 text-white" : result === "smishing" ? "bg-orange-500 text-white" : "bg-yellow-500 text-white"}`}>
+                        {result === "ham" && "✅ Safe"}
+                        {result === "safe" && "✅ Safe"}
+                        {result === "spam" && "🚫 Spam"}
+                        {result === "malicious" && "🚨 Malicious"}
+                        {result === "smishing" && "⚠️ Fraud"}
+                        {result === "Error" && "⚠️ Error"}
+                      </span>
                     </div>
-                  )}
-                </div>
-              )}
 
-              {result && result !== "Error" && type !== "url" && (
-                <FeedbackWidget
-                  key={`${text}|${result}|${confidence}`}
-                  text={text}
-                  predictedLabel={result}
-                  darkMode={isDark}
-                />
-              )}
+                    {confidence !== null && result !== "Error" && (
+                      <>
+                        <p className="text-sm opacity-70 mb-1">Confidence Score</p>
+                        <h3 className="text-3xl font-bold mb-4">{confidencePct}%</h3>
+                        <div className={`w-full rounded-full h-3 mb-5 ${isDark ? "bg-slate-700" : "bg-slate-200"}`} />
+                      </>
+                    )}
 
-              <button
-                onClick={() => {
-                  setText("");
-                  setResult("");
-                  setConfidence(null);
-                  setType("message");
-                }}
-                className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${
-                  isDark
-                    ? activeTheme.btnSecondaryDark
-                    : activeTheme.btnSecondary
-                }`}
-              >
-                Reset
-              </button>
+                    {result && confidence !== null && result !== "Error" && (
+                      <div className="mt-4 text-left">
+                        <p className="text-xs font-semibold mb-1 opacity-70">Model Confidence: {confidencePct}%</p>
+                        <div className={`w-full rounded-full h-2 ${isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                          <div className={`h-3 rounded-full transition-all duration-500 ${result === "ham" || result === "safe" ? "bg-green-500" : result === "spam" || result === "malicious" ? "bg-red-500" : "bg-orange-500"}`} style={{ width: `${confidencePct}%` }} />
+                        </div>
 
-              <FeatureImportance darkMode={isDark} />
+                        <div className="mb-5">
+                          <p className="text-sm opacity-70 mb-2">Risk Level</p>
+                          <span className={`px-4 py-2 rounded-full text-sm font-semibold ${riskLevel === "Low" ? "bg-green-100 text-green-700" : riskLevel === "Medium" ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}>
+                            {riskLevel === "Low" && "🟢 Low"}
+                            {riskLevel === "Medium" && "🟠 Medium"}
+                            {riskLevel === "High" && "🔴 High"}
+                          </span>
+                        </div>
 
-              {/* SPAM WORD OF THE DAY */}
-              {wordOfDay && (
-                <div className={`mt-6 p-4 rounded-xl border ${isDark ? 'bg-slate-800/30 border-slate-700' : 'bg-white/40 border-slate-200'}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold opacity-70">📚 Spam Word of the Day</h3>
-                    <button 
-                      onClick={fetchWordOfTheDay}
-                      className="text-xs opacity-50 hover:opacity-100 transition-opacity"
-                      title="Refresh word of the day"
+                        <div className="mt-4 mb-4">
+                          <button
+                            onClick={() => {
+                              const fullReport = `📊 Spam Detection Report\n─────────────────────\n🔍 Prediction: ${result === 'ham' || result === 'safe' ? '✅ Safe' : result === 'spam' || result === 'malicious' ? '🚫 Spam/Malicious' : result === 'smishing' ? '⚠️ Fraud' : '⚠️ Error'}\n📝 Message: ${text}\n📈 Confidence: ${confidence ? confidencePct + '%' : 'N/A'}\n⚠️ Risk Level: ${riskLevel}\n📅 Date: ${new Date().toLocaleString()}\n─────────────────────\nPowered by Spam Detection System`;
+                              navigator.clipboard.writeText(fullReport);
+                              setCopied(true);
+                              setTimeout(() => setCopied(false), 2000);
+                            }}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 w-full justify-center ${isDark ? "bg-slate-700 hover:bg-slate-600 text-slate-200" : "bg-slate-200 hover:bg-slate-300 text-slate-700"}`}
+                          >
+                            {copied ? '✅ Copied!' : '📋 Copy Full Report'}
+                          </button>
+                        </div>
+
+                        <p className="text-sm opacity-75 leading-relaxed">
+                          {(result === "spam" || result === "smishing" || result === "malicious") && "This content contains characteristics commonly found in spam, phishing, or malicious attacks."}
+                          {(result === "ham" || result === "safe") && "No suspicious patterns were detected in this content."}
+                        </p>
+                      </div>
+                    )}
+
+                    {explanation && result !== "Error" && (
+                      <PredictionExplanation explanation={explanation} result={result} />
+                    )}
+
+                    {result && result !== "Error" && type !== "url" && (
+                      <FeedbackWidget key={`${text}|${result}|${confidence}`} text={text} predictedLabel={result} darkMode={isDark} />
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setText("");
+                        setResult("");
+                        setConfidence(null);
+                        setExplanation(null);
+                        setErrorInfo(null);
+                        setType("message");
+                      }}
+                      className={`mt-4 w-full py-3.5 rounded-xl font-bold shadow-sm transition-all ${isDark ? activeTheme.btnSecondaryDark : activeTheme.btnSecondary}`}
                     >
-                      🔄
+                      Reset
                     </button>
                   </div>
-                  {wordLoading ? (
-                    <div className="h-8 w-48 bg-slate-300 rounded animate-pulse"></div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        <span className={`text-2xl font-bold ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>
-                          {wordOfDay.word || 'No spam detected today'}
-                        </span>
-                        {wordOfDay.count && (
-                          <span className="text-sm opacity-60">
-                            {wordOfDay.count} {wordOfDay.count === 1 ? 'detection' : 'detections'}
-                          </span>
-                        )}
-                      </div>
-                      {wordOfDay.definition && (
-                        <p className="text-sm mt-2 opacity-75 leading-relaxed">
-                          {wordOfDay.definition}
-                        </p>
-                      )}
-                      {wordOfDay.context && (
-                        <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-slate-900/50' : 'bg-slate-100/50'}`}>
-                          <span className="opacity-60">Example: </span>
-                          <span className="italic">"{wordOfDay.context}"</span>
-                        </div>
-                      )}
-                      {wordOfDay.tips && (
-                        <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
-                          💡 {wordOfDay.tips}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
+                )}
 
-              <WordCloud darkMode={isDark} />
-            </>
-          ) : activeTab === "bulk" ? (
-            <BulkSpamDetection />
-          ) : activeTab === "insights" ? (
-            <SpamInsightsDashboard />
-          ) : activeTab === "scanner" ? (
-            <EmailScannerDashboard />
-          ) : activeTab === "rules" ? (
-            <RulesManager />
-          ) : activeTab === "history" ? (
-            <History />
-          ) : (
-            <EmailHeaderAnalyzer />
-          )}
+                <FeatureImportance darkMode={isDark} />
+
+                {/* SPAM WORD OF THE DAY */}
+                {wordOfDay && (
+                  <div className={`mt-6 p-4 rounded-xl border ${isDark ? 'bg-slate-800/30 border-slate-700' : 'bg-white/40 border-slate-200'}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold opacity-70">📚 Spam Word of the Day</h3>
+                      <button onClick={fetchWordOfTheDay} className="text-xs opacity-50 hover:opacity-100 transition-opacity" title="Refresh word of the day">
+                        🔄
+                      </button>
+                    </div>
+                    {wordLoading ? (
+                      <div className="h-8 w-48 bg-slate-300 rounded animate-pulse"></div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-2xl font-bold ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>
+                            {wordOfDay.word || 'No spam detected today'}
+                          </span>
+                          {wordOfDay.count && (
+                            <span className="text-sm opacity-60">
+                              {wordOfDay.count} {wordOfDay.count === 1 ? 'detection' : 'detections'}
+                            </span>
+                          )}
+                        </div>
+                        {wordOfDay.definition && (
+                          <p className="text-sm mt-2 opacity-75 leading-relaxed">{wordOfDay.definition}</p>
+                        )}
+                        {wordOfDay.context && (
+                          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-slate-900/50' : 'bg-slate-100/50'}`}>
+                            <span className="opacity-60">Example: </span>
+                            <span className="italic">"{wordOfDay.context}"</span>
+                          </div>
+                        )}
+                        {wordOfDay.tips && (
+                          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
+                            💡 {wordOfDay.tips}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <WordCloud darkMode={isDark} />
+              </>
+            ) : activeTab === "bulk" ? (
+              <BulkSpamDetection />
+            ) : activeTab === "insights" ? (
+              <SpamInsightsDashboard />
+            ) : activeTab === "scanner" ? (
+              <EmailScannerDashboard />
+            ) : activeTab === "rules" ? (
+              <RulesManager />
+            ) : activeTab === "history" ? (
+              <History />
+            ) : (
+              <EmailHeaderAnalyzer />
+            )}
+
+            {showCelebration && (
+              <div className="celebration-modal" style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(0,0,0,0.6)',
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                zIndex: 1000
+              }}>
+                <div style={{
+                  background: 'white',
+                  padding: '40px',
+                  borderRadius: '20px',
+                  textAlign: 'center',
+                  maxWidth: '400px',
+                  width: '90%'
+                }}>
+                  <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🎉</div>
+                  <h2 style={{ color: '#7c3aed' }}>First Prediction Complete!</h2>
+                  <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
+                    You're on your way to becoming a spam detection expert!
+                  </p>
+                  <button
+                    onClick={() => setShowCelebration(false)}
+                    style={{
+                      padding: '10px 30px',
+                      background: '#7c3aed',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Continue Learning →
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <Footer darkMode={isDark} />
