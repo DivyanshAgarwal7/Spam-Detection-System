@@ -6,7 +6,7 @@ const User = require('../models/User');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-
+const BlacklistedToken = require('../models/BlacklistedToken');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const generateToken = (userId) => {
@@ -128,10 +128,10 @@ const googleLogin = async (req, res) => {
     } else {
       let baseUsername = name ? name.replace(/\s+/g, '').toLowerCase() : email.split('@')[0];
       let username = baseUsername;
-      
+
       const regex = new RegExp(`^${baseUsername}(\\d*)$`);
       const existingUsers = await User.find({ username: regex }).select('username').lean();
-      
+
       if (existingUsers.length > 0) {
         const exactMatch = existingUsers.find(u => u.username === baseUsername);
         if (exactMatch) {
@@ -185,16 +185,21 @@ const updateAvatar = async (req, res) => {
     const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
 
     // Clean up old avatar if it exists
+    // Clean up old avatar if it exists
     const currentUser = await User.findById(req.user.id);
+
     if (currentUser && currentUser.avatarUrl && currentUser.avatarUrl.includes('/uploads/')) {
       try {
         const oldFilename = currentUser.avatarUrl.split('/uploads/')[1];
         const oldFilePath = path.join(__dirname, '..', 'uploads', oldFilename);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
+
+        await fs.promises.access(oldFilePath);
+        await fs.promises.unlink(oldFilePath);
       } catch (err) {
-        console.error('Failed to delete old avatar:', err);
+        // Ignore missing files
+        if (err.code !== 'ENOENT') {
+          console.error('Failed to delete old avatar:', err);
+        }
       }
     }
 
@@ -227,7 +232,7 @@ const forgotPassword = async (req, res) => {
     // Generate token using password hash to make it single-use
     const secret = process.env.JWT_SECRET + user.password;
     const token = jwt.sign({ id: user._id, email: user.email }, secret, { expiresIn: '15m' });
-    
+
     // Generate reset link using configurable client URL
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
 
@@ -287,4 +292,26 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword };
+const logout = async (req, res) => {
+  try {
+    let token;
+    // Extract token from header
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      return res.status(400).json({ error: 'No token provided for logout.' });
+    }
+
+    // Add the token to the blacklist
+    await BlacklistedToken.create({ token });
+
+    res.json({ message: 'Successfully logged out. Token revoked.' });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({ error: 'Server error during logout.' });
+  }
+};
+
+module.exports = { register, login, logout, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword };

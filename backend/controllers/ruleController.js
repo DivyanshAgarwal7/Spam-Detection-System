@@ -57,6 +57,12 @@ const addRule = async (req, res) => {
       return res.status(400).json({ error: "Pattern must be a valid email address (e.g. user@domain.com) or domain (e.g. @domain.com or domain.com)" });
     }
 
+    // Enforce a hard limit on maximum rules per user to prevent storage exhaustion
+    const ruleCount = await Rule.countDocuments({ user: req.user.id });
+    if (ruleCount >= 500) {
+      return res.status(400).json({ error: "Maximum rule limit reached (500). Please delete some old rules before adding new ones." });
+    }
+
     // Check if the rule already exists
     const existingRule = await Rule.findOne({
       user: req.user.id,

@@ -208,6 +208,7 @@ function App() {
     <div className={`min-h-screen flex flex-col items-center px-4 py-8 pb-32 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light}`}>
       {/* Top Controls */}
       <div className="absolute top-4 right-4 flex gap-3 flex-wrap justify-end">
+        <InstallAppButton />
         <button
           onClick={() => setThemeMode(isDark ? 'light' : 'dark')}
           className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
