@@ -13,10 +13,14 @@ const CLEAN_LABELS = new Set(["ham", "safe"]);
 
 const pct = (count, total) => (total ? Number(((count / total) * 100).toFixed(2)) : 0);
 
+const getUserObjectId = (req) => {
+  return new mongoose.Types.ObjectId(req.user.id)
+}
+
 // GET /analytics/summary
 const getSummary = async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = getUserObjectId(req);
     const counts = await History.aggregate([
       { $match: { user: userId } },
       { $group: { _id: "$prediction", count: { $sum: 1 } } },
@@ -57,7 +61,7 @@ const getTrends = async (req, res) => {
       ? req.query.range
       : "daily";
 
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = getUserObjectId(req);
     const trends = await History.aggregate([
       { $match: { user: userId } },
       {
@@ -88,7 +92,7 @@ const getTrends = async (req, res) => {
 // GET /analytics/breakdown
 const getBreakdown = async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = getUserObjectId(req);
     const breakdown = await History.aggregate([
       { $match: { user: userId } },
       {
@@ -115,7 +119,7 @@ const getBreakdown = async (req, res) => {
 // GET /analytics/me
 const getPersonalSummary = async (req, res) => {
   try {
-    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const userId = getUserObjectId(req);
     const stats = await History.aggregate([
       { $match: { user: userId } },
       {
