@@ -34,7 +34,9 @@ def client():
     api_module.app.config["ENFORCE_INTERNAL_SECRET"] = False
 
 
-VALID_SECRET = {"X-Internal-Secret": "super-secret-internal-key"}
+from conftest import TEST_INTERNAL_SECRET
+
+VALID_SECRET = {"X-Internal-Secret": TEST_INTERNAL_SECRET}
 
 
 def test_predict_rejected_without_secret(client):

@@ -1,9 +1,10 @@
 const Rule = require("../models/Rule");
+const { validateKeywordPattern } = require("../utils/keywordRules");
 
 // Get all rules for the logged-in user
 const getRules = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = parseInt(req.query.limit) || 100;
     const safeLimit = Math.min(limit, 100);
     const skip = (page - 1) * safeLimit;
@@ -33,43 +34,69 @@ const getRules = async (req, res) => {
 // Add a new rule
 const addRule = async (req, res) => {
   try {
-    const { type, pattern } = req.body;
-    
+    const { type, pattern, ruleCategory } = req.body;
+
     if (!type || !pattern) {
       return res.status(400).json({ error: "Type and pattern are required" });
     }
-    
+
     const lowerType = type.toLowerCase();
     if (lowerType !== "blacklist" && lowerType !== "whitelist") {
       return res.status(400).json({ error: "Type must be either blacklist or whitelist" });
     }
-    
-    const trimmedPattern = pattern.trim().toLowerCase();
-    if (!trimmedPattern) {
-      return res.status(400).json({ error: "Pattern cannot be empty" });
+
+    // Default to sender rules so existing clients keep working unchanged.
+    const category = (ruleCategory || "sender").toLowerCase();
+    if (category !== "sender" && category !== "keyword") {
+      return res.status(400).json({ error: "ruleCategory must be either sender or keyword" });
     }
-    
-    // Validate pattern: check if it's a valid email or domain
-    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedPattern);
-    const isValidDomain = /^(?:@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)|(?:[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)$/.test(trimmedPattern);
-    
-    if (!isValidEmail && !isValidDomain) {
-      return res.status(400).json({ error: "Pattern must be a valid email address (e.g. user@domain.com) or domain (e.g. @domain.com or domain.com)" });
+
+    let trimmedPattern;
+    if (category === "keyword") {
+      // Keyword rules match message content: any non-empty string within the
+      // length limit is valid (no email/domain shape required).
+      const result = validateKeywordPattern(pattern);
+      if (!result.valid) {
+        return res.status(400).json({ error: result.error });
+      }
+      trimmedPattern = result.value;
+    } else {
+      trimmedPattern = pattern.trim().toLowerCase();
+      if (!trimmedPattern) {
+        return res.status(400).json({ error: "Pattern cannot be empty" });
+      }
+
+      // Validate pattern: check if it's a valid email or domain
+      const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedPattern);
+      const isValidDomain = /^(?:@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)|(?:[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)$/.test(trimmedPattern);
+
+      if (!isValidEmail && !isValidDomain) {
+        return res.status(400).json({ error: "Pattern must be a valid email address (e.g. user@domain.com) or domain (e.g. @domain.com or domain.com)" });
+      }
+    }
+
+    // Enforce a hard limit on maximum rules per user to prevent storage
+    // exhaustion. The cap is shared across sender and keyword rules.
+    const ruleCount = await Rule.countDocuments({ user: req.user.id });
+    if (ruleCount >= 500) {
+      return res.status(400).json({ error: "Maximum rule limit reached (500). Please delete some old rules before adding new ones." });
     }
 
     // Check if the rule already exists
     const existingRule = await Rule.findOne({
       user: req.user.id,
+      ruleCategory: category,
       type: lowerType,
       pattern: trimmedPattern,
     });
-    
+
     if (existingRule) {
       return res.status(400).json({ error: "This rule already exists" });
     }
 
     const newRule = await Rule.create({
       user: req.user.id,
+      ruleCategory: category,
       type: lowerType,
       pattern: trimmedPattern,
     });

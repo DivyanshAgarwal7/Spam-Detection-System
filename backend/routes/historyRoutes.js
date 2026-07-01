@@ -36,9 +36,10 @@ router.delete("/bulk-delete", protect, async (req, res) => {
     });
 
   } catch (error) {
+    console.error("Bulk delete histoy error: ", error);
     res.status(500).json({ 
       success: false, 
-      message: error.message 
+      message: "Internal server error"
     });
   }
 });

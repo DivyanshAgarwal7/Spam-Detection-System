@@ -6,7 +6,7 @@ const User = require('../models/User');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-
+const BlacklistedToken = require('../models/BlacklistedToken');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const generateToken = (userId) => {
@@ -14,6 +14,17 @@ const generateToken = (userId) => {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
+
+const buildAuthResponse = (user, token) => ({
+  token,
+  user: {
+    id: user._id,
+    username: user.username,
+    email: user.email,
+    avatarUrl: user.avatarUrl,
+    provider: user.provider,
+  },
+});
 
 const register = async (req, res) => {
   try {
@@ -35,8 +46,7 @@ const register = async (req, res) => {
 
     res.status(201).json({
       message: 'Account created successfully!',
-      token,
-      user: { id: user._id, username: user.username, email: user.email, avatarUrl: user.avatarUrl },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -71,8 +81,7 @@ const login = async (req, res) => {
 
     res.json({
       message: 'Login successful!',
-      token,
-      user: { id: user._id, username: user.username, email: user.email, avatarUrl: user.avatarUrl },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -119,12 +128,23 @@ const googleLogin = async (req, res) => {
     } else {
       let baseUsername = name ? name.replace(/\s+/g, '').toLowerCase() : email.split('@')[0];
       let username = baseUsername;
-      let userExists = await User.findOne({ username });
-      let counter = 1;
-      while (userExists) {
-        username = `${baseUsername}${counter}`;
-        userExists = await User.findOne({ username });
-        counter++;
+
+      const regex = new RegExp(`^${baseUsername}(\\d*)$`);
+      const existingUsers = await User.find({ username: regex }).select('username').lean();
+
+      if (existingUsers.length > 0) {
+        const exactMatch = existingUsers.find(u => u.username === baseUsername);
+        if (exactMatch) {
+          let maxCounter = 0;
+          existingUsers.forEach(u => {
+            const match = u.username.match(regex);
+            if (match && match[1]) {
+              const num = parseInt(match[1]);
+              if (num > maxCounter) maxCounter = num;
+            }
+          });
+          username = `${baseUsername}${maxCounter + 1}`;
+        }
       }
 
       user = await User.create({
@@ -140,14 +160,7 @@ const googleLogin = async (req, res) => {
 
     res.json({
       message: 'Login successful!',
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-        provider: user.provider,
-      },
+      ...buildAuthResponse(user, token),
     });
   } catch (err) {
     console.error('Google Auth Error:', err);
@@ -160,7 +173,7 @@ const updateAvatar = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    
+
     const filename = `${req.user.id}-${Date.now()}.webp`;
     const filepath = path.join(__dirname, '..', 'uploads', filename);
 
@@ -170,31 +183,36 @@ const updateAvatar = async (req, res) => {
       .toFile(filepath);
 
     const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
-    
+
+    // Clean up old avatar if it exists
     // Clean up old avatar if it exists
     const currentUser = await User.findById(req.user.id);
+
     if (currentUser && currentUser.avatarUrl && currentUser.avatarUrl.includes('/uploads/')) {
       try {
         const oldFilename = currentUser.avatarUrl.split('/uploads/')[1];
         const oldFilePath = path.join(__dirname, '..', 'uploads', oldFilename);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
+
+        await fs.promises.access(oldFilePath);
+        await fs.promises.unlink(oldFilePath);
       } catch (err) {
-        console.error('Failed to delete old avatar:', err);
+        // Ignore missing files
+        if (err.code !== 'ENOENT') {
+          console.error('Failed to delete old avatar:', err);
+        }
       }
     }
-    
+
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { avatarUrl },
       { new: true }
     ).select('-password');
-    
+
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
+
     res.json({ message: 'Avatar updated successfully', user });
   } catch (err) {
     console.error('Avatar upload error:', err);
@@ -213,10 +231,12 @@ const forgotPassword = async (req, res) => {
 
     // Generate token using password hash to make it single-use
     const secret = process.env.JWT_SECRET + user.password;
-    const token = jwt.sign({ id: user._id, email: user.email }, secret, { expiresIn: '15m' });
+    const token = jwt.sign({ id: user._id, email: user.email }, secret, { expiresIn: process.env.PASSWORD_RESET_TOKEN_EXPIRES || '15m' });
 
-    // Mock reset link
-    const resetLink = `http://localhost:3000/reset-password/${user._id}/${token}`;
+    // Generate reset link using configurable client URL
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+
+    const resetLink = `${clientUrl}/reset-password/${user._id}/${token}`;
 
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
@@ -227,9 +247,11 @@ const forgotPassword = async (req, res) => {
       },
     });
 
+    const emailFrom = process.env.EMAIL_FROM || '"Spam Detection System" <noreply@spamdetection.local>';
+
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       await transporter.sendMail({
-        from: '"Spam Detection System" <noreply@spamdetection.local>',
+        from: emailFrom,
         to: user.email,
         subject: 'Password Reset Request',
         text: `Please use the following link to reset your password: ${resetLink} \n\nThis link expires in 15 minutes.`,
@@ -301,3 +323,26 @@ const updateWebhook = async (req, res) => {
 };
 
 module.exports = { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook };
+const logout = async (req, res) => {
+  try {
+    let token;
+    // Extract token from header
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      return res.status(400).json({ error: 'No token provided for logout.' });
+    }
+
+    // Add the token to the blacklist
+    await BlacklistedToken.create({ token });
+
+    res.json({ message: 'Successfully logged out. Token revoked.' });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({ error: 'Server error during logout.' });
+  }
+};
+
+module.exports = { register, login, logout, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword };

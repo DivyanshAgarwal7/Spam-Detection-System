@@ -22,6 +22,7 @@ const upload = multer({
   limits: { fileSize: 2 * 1024 * 1024 } // 2MB limit
 });
 
+const { handleAvatarUpload } = require('../middleware/avatarUpload');
 const registerValidation = [
   body('username').trim().isLength({ min: 3, max: 30 }).withMessage('Username must be 3–30 characters'),
   body('email').isEmail().withMessage('Please enter a valid email'),
@@ -37,7 +38,7 @@ router.post('/login', loginValidation, loginLimiter, login);
 router.post('/register', registerValidation, registerLimiter, register);
 router.post('/google', loginLimiter, googleLogin);
 router.get('/me', protect, getMe);
-router.post('/avatar', protect, upload.single('avatar'), updateAvatar);
+router.post('/avatar', protect, handleAvatarUpload, updateAvatar);
 
 // ---> NEW: Webhook Settings Route (Protected)
 router.put('/webhook', protect, updateWebhook);

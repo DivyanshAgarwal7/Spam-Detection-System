@@ -2,6 +2,18 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
+// Utility to prevent XSS rendering
+const escapeHTML = (str) => {
+    if (!str) return '';
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+};
+
+
 const History = () => {
     const [history, setHistory] = useState([]);
     const [selectedItems, setSelectedItems] = useState([]);
@@ -15,7 +27,7 @@ const History = () => {
         return sortOrder === 'newest' ? dateB - dateA : dateA - dateB;
     });
 
-    const fetchHistory = async () => {
+const fetchHistory = async () => {
         setIsLoading(true);
         try {
             const token = localStorage.getItem('token');
@@ -29,14 +41,6 @@ const History = () => {
             setIsLoading(false);
         }
     };
-
-    useEffect(() => {
-        setSelectedItems([]);
-        fetchHistory();
-        return () => {
-            setSelectedItems([]);
-        };
-    }, []);
 
     const handleBulkDelete = async () => {
         if (!confirm(`Delete ${selectedItems.length} item(s)?`)) return;
@@ -255,7 +259,7 @@ const History = () => {
                             checked={selectedItems.includes(item._id)}
                             onChange={() => toggleSelect(item._id)}
                         />
-                        <span style={{ flex: 1 }}>{item.query}</span>
+                        <span style={{ flex: 1 }}>{escapeHTML(item.query)}</span>
                         {item.confidence != null && (
                             <div style={{ display: 'flex', alignItems: 'center', width: '120px', marginRight: '10px' }}>
                                 <div style={{ 
@@ -297,7 +301,6 @@ const History = () => {
                 ))
             )}
         </div>
-    );
+    )
 };
-
 export default History;

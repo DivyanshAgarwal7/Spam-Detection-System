@@ -1,4 +1,4 @@
-const { formatError, errorHandler, errorCodes } = require('./utils/errorHelper');
+const { formatError, errorHandler, errorCodes, classifyMlApiError } = require('./utils/errorHelper');
 require("dotenv").config();
 const dns = require("dns");
 const validateEnv = require('./utils/validateEnv');
@@ -27,8 +27,10 @@ const logStartupTime= (component, startTime) => {
 // Configure global request interceptor to append the internal secret API key
 axios.interceptors.request.use(
   (config) => {
-    const internalSecret = process.env.INTERNAL_SECRET || "super-secret-internal-key";
-    config.headers["X-Internal-Secret"] = internalSecret;
+    config.timeout = 15000; // 15 seconds timeout
+    // No hardcoded fallback: INTERNAL_SECRET is validated as mandatory at
+    // startup (see utils/validateEnv.js), so it is guaranteed present here.
+    config.headers["X-Internal-Secret"] = process.env.INTERNAL_SECRET;
     return config;
   },
   (error) => {
@@ -40,12 +42,17 @@ const mongoose = require("mongoose");
 const History = require("./models/History");
 const Rule = require("./models/Rule");
 const User = require("./models/User");
+const { matchKeywordRule } = require("./utils/keywordRules");
+
 const multer = require("multer");
 const displayBanner = require('./utils/banner');
 const upload = multer();
 const FormData = require("form-data");
 
 const app = express();
+
+// Trust the first proxy so express-rate-limit correctly identifies user IPs
+app.set('trust proxy', 1);
 
 const Sentry = require("@sentry/node");
 
@@ -227,6 +234,7 @@ app.use("/api/rules", ruleRoutes);
 app.use("/api/reports", reportRoutes);
 
 const { protect } = require("./middleware/authMiddleware");
+const { predictLimiter } = require("./middleware/rateLimiter");
 
 // ===== PREDICTION COUNT =====
 app.get('/api/history/count',protect,async (req,res) => {
@@ -280,7 +288,7 @@ const dispatchWebhook = async (userId, payload) => {
 };
 
 // Protected: only authenticated users can predict
-app.post("/predict", protect, async (req, res) => {
+app.post("/predict", predictLimiter, protect, async (req, res) => {
   try {
     console.log("Reached /predict");
     const { text, type, sender } = req.body;
@@ -341,6 +349,7 @@ app.post("/predict", protect, async (req, res) => {
 
       const rule = await Rule.findOne({
         user: req.user.id,
+        ruleCategory: { $ne: 'keyword' },
         pattern: { $in: possiblePatterns }
       });
 
@@ -374,6 +383,43 @@ app.post("/predict", protect, async (req, res) => {
       }
     }
 
+    // Check keyword/phrase rules against the message content before falling
+    // back to the ML model. A whitelisted phrase overrides a spam-looking
+    // message; a blacklisted phrase flags it as spam.
+    const keywordRules = await Rule.find({
+      user: req.user.id,
+      ruleCategory: 'keyword',
+    }).limit(1000).lean();
+
+    const keywordMatch = matchKeywordRule(text, keywordRules);
+    if (keywordMatch) {
+      const isSpam = keywordMatch.type === 'blacklist';
+      const prediction = isSpam ? "spam" : "ham";
+
+      try {
+        await History.create({
+          user: req.user.id,
+          query: text,
+          prediction: prediction,
+          type: type,
+          confidence: 1.0,
+        });
+      } catch (historyError) {
+        console.error("Failed to save history for keyword rule match:", historyError.message);
+      }
+
+      console.log(`Keyword rule match found (${keywordMatch.type}):`, keywordMatch.pattern);
+      return res.json({
+        input: text,
+        prediction: prediction,
+        confidence: 1.0,
+        confidence_level: "high",
+        level_color: isSpam ? "red" : "green",
+        level_emoji: isSpam ? "🔴" : "🟢",
+        rule_applied: keywordMatch.type,
+      });
+    }
+
     console.log("Calling Flask...");
 
     const response = await axios.post(
@@ -383,7 +429,8 @@ app.post("/predict", protect, async (req, res) => {
         type: type.toLowerCase(),
       },
       {
-        headers: { "X-Forwarded-For": req.ip || req.connection.remoteAddress }
+        headers: { "X-Forwarded-For": req.ip || req.connection.remoteAddress },
+        timeout: Number(process.env.ML_API_TIMEOUT_MS) || 15000,
       }
     );
     console.log("Flask responded:", response.data);
@@ -431,7 +478,11 @@ Sentry.captureException(error, {
     });
 
     console.error(`[${req.requestId}]`, error.message);
-    res.status(500).json({ error: "Something went wrong" });
+
+    // Distinguish ML API failures (timeout / unavailable / upstream 4xx vs 5xx)
+    // so the frontend can show specific messaging and a retry affordance.
+    const { status, body } = classifyMlApiError(error);
+    res.status(status).json(body);
   }
 });
 
@@ -817,6 +868,7 @@ app.get("/gmail/connect", protect, async (req, res) => {
   }
 });
 
+
 // Protected: Get latest Gmail emails
 app.get("/gmail/emails", protect, async (req, res) => {
   try {
@@ -947,7 +999,17 @@ async function applyRulesToEmails(userId, emails) {
     return { emails: emails || [], spamCount: 0, safeCount: 0 };
   }
   
-  const rules = await Rule.find({ user: userId });
+  const rules = await Rule.find({ user: userId }).limit(1000).lean();
+  
+  const blacklist = new Set();
+  const whitelist = new Set();
+  
+  rules.forEach(r => {
+    if (!r.pattern) return;
+    const pattern = r.pattern.toLowerCase().trim();
+    if (r.type === 'blacklist') blacklist.add(pattern);
+    else if (r.type === 'whitelist') whitelist.add(pattern);
+  });
   
   let spamCount = 0;
   let safeCount = 0;
@@ -978,9 +1040,20 @@ async function applyRulesToEmails(userId, emails) {
       possiblePatterns.push(domain);
     }
     
-    const matchingRule = rules.find(r => possiblePatterns.includes(r.pattern.toLowerCase().trim()));
-    if (matchingRule) {
-      const isSpam = matchingRule.type === 'blacklist';
+    let matchedType = null;
+    for (const pattern of possiblePatterns) {
+      if (blacklist.has(pattern)) {
+        matchedType = 'blacklist';
+        break;
+      }
+      if (whitelist.has(pattern)) {
+        matchedType = 'whitelist';
+        break;
+      }
+    }
+    
+    if (matchedType) {
+      const isSpam = matchedType === 'blacklist';
       const updatedPrediction = isSpam ? 'spam' : 'ham';
       
       if (updatedPrediction === 'spam') {
@@ -1083,7 +1156,7 @@ app.post("/imap/connect", protect, async (req, res) => {
 });
 
 // ========================================
-// ERROR HANDLERS (ONLY ONCE!)
+// ERROR HANDLERS
 // ========================================
 
 app.use((err, req, res, next) => {
@@ -1107,13 +1180,13 @@ const PORT = config.port;
 const server = app.listen(PORT, () => {
   displayBanner();
   const totalTime = Date.now() - SERVER_START_TIME;
-  displayBanner();
   console.log(`⏱️ Total startup time: ${totalTime}ms`);
+});
+
 // ====== PREDICTION STATISTICS ======
 app.get('/api/stats', protect, async (req, res) => {
     try {
         const userId = req.user.id;
-        
         const total = await History.countDocuments({ user: userId });
         const spam = await History.countDocuments({ user: userId, prediction: 'spam' });
         const ham = await History.countDocuments({ user: userId, prediction: 'ham' });
@@ -1128,7 +1201,6 @@ app.get('/api/stats', protect, async (req, res) => {
             { $limit: 7 }
         ]);
         
-        // Get accuracy if feedback exists
         const feedbackCount = await History.countDocuments({ 
             user: userId, 
             feedback: { $exists: true } 
@@ -1301,7 +1373,6 @@ app.get("/imap/scan-results", protect, async (req, res) => {
     res.status(500).json({ error: "Something went wrong" });
   }
 });
-});
 
 // ===== SEARCH HISTORY =====
 app.get('/api/history/search',protect, async(req,res) => {
@@ -1350,17 +1421,6 @@ app.get('/api/history/search',protect, async(req,res) => {
         });
     }
 });
-// ========================================
-// START SERVER
-// ========================================
-
-// const PORT = config.port;
-// const server = app.listen(PORT, () => {
-//   const totalTime = Date.now() - SERVER_START_TIME;
-//   displayBanner();
-//   console.log(`⏱️ Total startup time: ${totalTime}ms`);
-// });
-// Listen for termination signals
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
