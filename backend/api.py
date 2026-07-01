@@ -242,12 +242,6 @@ def predict():
                     f"characters (got {len(text)})"
                 )
             }), 400
-        if final_output == "spam":
-            words = extract_words(text)
-            for word in words:
-                spam_words_storage[word] = spam_words_storage.get(word, 0) + 1
-
-        record_scan(text, final_output, input_type)
 
         # Translate incoming text to English if it is not in English
         original_text = text
@@ -352,6 +346,9 @@ def predict():
             words = extract_words(text)
             for word in words:
                 spam_words_storage[word] = spam_words_storage.get(word, 0) + 1
+
+        # Record the scan now that the prediction label is known.
+        record_scan(text, final_output, input_type)
 
         # Log prediction
         text_preview = text[:50] + "..." if len(text) > 50 else text
