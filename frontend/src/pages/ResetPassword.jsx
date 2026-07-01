@@ -62,7 +62,7 @@ const ResetPassword = () => {
     <div className={`min-h-screen flex items-center justify-center px-4 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light}`}>
       <div className={`w-full max-w-md backdrop-blur-xl border rounded-3xl shadow-2xl p-8 sm:p-10 transition-all duration-500 ${isDark ? activeTheme.cardDark : activeTheme.card}`}>
         <h2 className="flex items-center justify-center gap-3 text-3xl font-extrabold mb-2">
-          <img src={SpamLogo} alt="Spam Logo" className="w-24 h-16 object-contain"></img> Spam Detector
+        <h1 className="text-3xl font-extrabold mb-2">Spam Detector</h1>
         </h2>
         <p className="text-center opacity-70 mb-8 text-sm font-semibold">Choose a new password</p>
 

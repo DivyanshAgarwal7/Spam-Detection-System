@@ -90,28 +90,7 @@ const Login = () => {
   };
 
   return (
-    <div
-      className={`min-h-screen flex items-center justify-center px-4 transition-all duration-500 ${
-        isDark ? activeTheme.dark : activeTheme.light
-      }`}
-    >
-      <div
-        className={`w-full max-w-md backdrop-blur-xl border rounded-3xl shadow-2xl p-8 sm:p-10 transition-all duration-500 ${
-          isDark ? activeTheme.cardDark : activeTheme.card
-        }`}
-      >
-        <h2 className="flex items-center justify-center gap-2 text-3xl font-extrabold text-center mb-2">
-          <img
-            src="/src/assets/SpamLogo.png"
-            alt="Spam Detector Logo"
-            className="w-20 h-12"
-          />
-          <span>Spam Detector</span>
-        </h2>
 
-        <p className="text-center opacity-70 mb-8 text-sm font-semibold">
-          Welcome Back
-        </p>
 
         {error && (
           <div className="bg-red-500/15 border border-red-500/30 text-red-500 px-4 py-3 rounded-xl mb-6 text-sm font-medium">
