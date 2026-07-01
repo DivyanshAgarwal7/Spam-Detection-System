@@ -278,6 +278,10 @@ app.post("/predict", predictLimiter, protect, async (req, res) => {
       return res.status(400).json({ error: "Text and type must be strings." });
     }
 
+    if (sender !== undefined && typeof sender !== "string") {
+      return res.status(400).json({ error: "Sender must be a string." });
+    }
+
     // Check 3: must not be empty or only whitespace
     if (text.trim().length === 0) {
       return res
