@@ -171,6 +171,21 @@ function App() {
     }
   };
 
+  const getTextStats = (text) => {
+    if(!text || text.trim().length === 0) 
+      return { words: 0, chars: 0, avgWordLength: 0, sentences: 0 };
+    }
+    const words = text.trim().split(/\s+/);
+    const chars = text.replace(/\s+/g, '').length;
+    const avgWordLength = words.length > 0 ? (chars / words.length).toFixed(1) : 0;
+    const sentences = text.trim().split(/[.!?]+/).filter(Boolean).length;
+    return{
+      words: words.length,
+      chars,
+      avgWordLength,
+      sentences
+   };
+  };
   const fetchWordOfTheDay = async () => {
     try {
       setWordLoading(true);
@@ -482,16 +497,25 @@ function App() {
                       ✕
                     </button>
                   )}
-
-                  <div className="flex justify-between items-center mt-1.5 px-1 text-xs font-medium tracking-wide opacity-70">
-                    <span>📖 {calculateReadingTime(text)}</span>
+                  {text && (
+                    <div className="flex flex-wrap justify-between items-center mt-1.5 px-1 text-xs font-medium tracking-wide opacity-70 gap-1">
+                      <div className="flex flex-wrap gap-3">
+                       <span>📖 {calculateReadingTime(text)}</span>
+                      <span>📝 {getTextStats(text).words} words</span>
+                      <span>📏 Avg {getTextStats(text).avgWordLength} chars</span>
+                      <span>📄 {getTextStats(text).sentences} sentences</span>
+                    </div>
                     {text.length > 5000 ? (
-                      <span className="text-red-500 font-bold">{text.length.toLocaleString()} / 5000 characters (Limit exceeded)</span>
+                      <span className="text-red-500 font-bold">
+                        {text.length.toLocaleString()} / 5000 characters (Limit exceeded)
+                      </span>
                     ) : (
-                      <span className={text.length > 500 ? "text-orange-500" : ""}>{text.length.toLocaleString()} characters</span>
+                      <span className={text.length > 500 ? "text-orange-500" : ""}>
+                        {text.length.toLocaleString()} characters
+                      </span>
                     )}
                   </div>
-                </div>
+                  )}
 
                 <button
                   onClick={() => {
