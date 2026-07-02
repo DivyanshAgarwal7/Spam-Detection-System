@@ -171,6 +171,7 @@ function App() {
     }
   };
 
+
   const getTextStats = (text) => {
     if(!text || text.trim().length === 0) {
       return { words: 0, chars: 0, avgWordLength: 0, sentences: 0 };
@@ -186,6 +187,46 @@ function App() {
       sentences
    };
   };
+
+  const detectPatterns = (text) => {
+  const patterns = [];
+  if (!text) return patterns;
+  
+  if (text.includes('!!!') || (text.match(/!/g) || []).length >= 3) {
+    patterns.push({ icon: '🔴', label: 'Multiple exclamation marks', severity: 'medium' });
+  }
+  if (text.match(/http[s]?:\/\/\S+/)) {
+    patterns.push({ icon: '🔗', label: 'Suspicious link detected', severity: 'high' });
+  }
+  if (text.match(/urgent|immediate|act now|asap|hurry/i)) {
+    patterns.push({ icon: '⏰', label: 'Urgency detected', severity: 'medium' });
+  }
+  if (text.match(/free|win|prize|claim|winner|congratulations|bonus|offer/i)) {
+    patterns.push({ icon: '🎯', label: 'Incentive bait detected', severity: 'medium' });
+  }
+  if (text.match(/[A-Z]{5,}/)) {
+    patterns.push({ icon: '🔊', label: 'Excessive caps detected', severity: 'low' });
+  }
+  if (text.match(/[^a-zA-Z0-9\s]/g) && (text.match(/[^a-zA-Z0-9\s]/g) || []).length > 10) {
+    patterns.push({ icon: '💀', label: 'Many special characters', severity: 'low' });
+  }
+  if (text.match(/\b\d{10,}\b/)) {
+    patterns.push({ icon: '📱', label: 'Phone number detected', severity: 'medium' });
+  }
+  if (text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)) {
+    patterns.push({ icon: '📧', label: 'Email address detected', severity: 'low' });
+  }
+  if (text.match(/password|credit card|bank account|ssn|social security/i)) {
+    patterns.push({ icon: '🔒', label: 'Sensitive data request', severity: 'high' });
+  }
+  if (text.match(/click here|visit|subscribe|download|sign up|register/i)) {
+    patterns.push({ icon: '👆', label: 'Call to action detected', severity: 'low' });
+  }
+  
+  return patterns;
+};
+
+
   const fetchWordOfTheDay = async () => {
     try {
       setWordLoading(true);
@@ -615,6 +656,30 @@ function App() {
                         <div className={`w-full rounded-full h-2 ${isDark ? "bg-slate-800" : "bg-slate-200"}`}>
                           <div className={`h-3 rounded-full transition-all duration-500 ${result === "ham" || result === "safe" ? "bg-green-500" : result === "spam" || result === "malicious" ? "bg-red-500" : "bg-orange-500"}`} style={{ width: `${confidencePct}%` }} />
                         </div>
+                    {/* Pattern Tags - Show only for spam/malicious/smishing */}
+                    {(result === "spam" || result === "malicious" || result === "smishing") && detectPatterns(text).length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-700/20">
+                       <p className="text-xs font-semibold opacity-70 mb-2 flex items-center gap-1">
+                       <span>🚨</span> Spam Indicators
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {detectPatterns(text).map((pattern, index) => (
+                         <span 
+                          key={index}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border
+                          ${pattern.severity === 'high' 
+                          ? 'bg-red-100 text-red-700 border-red-300 dark:bg-red-900/30 dark:text-red-400 dark:border-red-700' 
+                          : pattern.severity === 'medium' 
+                          ? 'bg-yellow-100 text-yellow-700 border-yellow-300 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-700'
+                          : 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-700'}`}
+                        >
+                          <span>{pattern.icon}</span>
+                         <span>{pattern.label}</span>
+                      </span>
+                    ))}
+                  </div>
+                 </div>
+                )}
 
                         <div className="mb-5">
                           <p className="text-sm opacity-70 mb-2">Risk Level</p>

@@ -294,6 +294,35 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// ---> NEW: Webhook Update Controller (For Issue #430)
+const updateWebhook = async (req, res) => {
+  try {
+    const { webhookUrl } = req.body;
+    
+    // We allow empty strings to let the user "delete/disable" their webhook
+    const newWebhookValue = (webhookUrl && webhookUrl.trim() !== '') ? webhookUrl.trim() : null;
+
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { webhookUrl: newWebhookValue },
+      { new: true, runValidators: true } // runValidators ensures the Regex in schema is checked
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ message: 'Webhook URL updated successfully!', user });
+  } catch (err) {
+    console.error('Webhook update error:', err);
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: 'Invalid Webhook URL format. Must start with http:// or https://' });
+    }
+    res.status(500).json({ error: 'Server error. Please try again.' });
+  }
+};
+
+module.exports = { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook };
 const logout = async (req, res) => {
   try {
     let token;

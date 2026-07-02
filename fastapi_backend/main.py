@@ -99,9 +99,12 @@ def predict(body: PredictIn):
         scores = model.decision_function(vectorized_text)[0]
         confidence = round(float(np.max(scores)), 4)
 
+        # Backward compatible keys: the Flask API returns `result`, while some
+        # frontends expect `res.data.result`. Keep both.
         return {
-            "prediction": label,       # e.g. "ham", "spam", "smishing"
-            "confidence": confidence,  # e.g. 1.2345
+            "result": label,           # e.g. "ham", "spam", "smishing"
+            "prediction": label,      # legacy key
+            "confidence": confidence, # e.g. 1.2345
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

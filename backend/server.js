@@ -41,6 +41,7 @@ const mongoose = require("mongoose");
 
 const History = require("./models/History");
 const Rule = require("./models/Rule");
+const User = require("./models/User");
 const { matchKeywordRule } = require("./utils/keywordRules");
 
 const multer = require("multer");
@@ -273,6 +274,28 @@ app.get("/health", async (req, res) => {
   }
 });
 
+// ---> NEW: Asynchronous Webhook Dispatcher (For Issue #430)
+const dispatchWebhook = async (userId, payload) => {
+  try {
+    const user = await User.findById(userId);
+    if (user && user.webhookUrl) {
+      console.log(`[Webhook] Dispatching threat alert to: ${user.webhookUrl}`);
+      
+      // Fire and forget (Asynchronous execution via Axios)
+      axios.post(user.webhookUrl, {
+        event: 'high_risk_threat_detected',
+        timestamp: new Date().toISOString(),
+        threat_details: payload
+      }).catch(err => {
+        // Resilience: Catch external server errors so our app doesn't crash
+        console.error(`[Webhook Failed] Could not deliver to ${user.webhookUrl}:`, err.message);
+      });
+    }
+  } catch (err) {
+    console.error('[Webhook Error] Error fetching user for webhook:', err.message);
+  }
+};
+
 // Protected: only authenticated users can predict
 app.post("/predict", predictLimiter, protect, async (req, res) => {
   try {
@@ -434,6 +457,20 @@ app.post("/predict", predictLimiter, protect, async (req, res) => {
 
       console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
     }
+
+    // ---> NEW: Trigger Webhook if threat is high risk
+    const predictionLabel = response.data.prediction ? response.data.prediction.toLowerCase() : '';
+    const confidenceScore = response.data.confidence || 0;
+    
+    if (['spam', 'malicious', 'smishing', 'phishing'].includes(predictionLabel) || confidenceScore > 0.90) {
+      dispatchWebhook(req.user.id, {
+        input_text: text,
+        type: type,
+        prediction: predictionLabel,
+        confidence: confidenceScore
+      });
+    }
+    
 
     res.json(response.data);
   } catch (error) {

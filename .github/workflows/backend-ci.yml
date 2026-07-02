@@ -1,0 +1,33 @@
+name: Backend CI Pipeline
+
+on:
+  pull_request:
+    branches: [ "main", "master" ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    name: Run Jest Unit Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./backend
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js Environment
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
+        cache: 'npm'
+        cache-dependency-path: ./backend/package-lock.json
+
+    - name: Install Dependencies
+      run: npm ci
+
+    - name: Execute Test Suite
+      run: npm test
