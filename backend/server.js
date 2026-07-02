@@ -1137,9 +1137,7 @@ const gracefulShutdown = async (signal) => {
   });
 };
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
+process.on('SIGINT', () => process.exit(0));
 // Protected: get the current IMAP connection status for the logged-in user
 app.get("/imap/status", protect, async (req, res) => {
   try {
