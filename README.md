@@ -994,8 +994,8 @@ Feel free to fork, improve and contribute to this project!
 
 ## 📜 License
 
-This project is open-source and available under the MIT License.
+This project is open-source and available under the GPL-3.0 License.
 
 You are free to use, modify, and distribute this project for personal or commercial use, provided that proper credit is given.
 
-For more details, see the [LICENSE](LICENSE) file.
+For more details, see the [LICENSE](https://www.gnu.org/licenses/gpl-3.0) file.
