@@ -1,12 +1,13 @@
 const { generatePdfReport } = require("../utils/pdfGenerator");
 const History = require("../models/History");
+const mongoose = require("mongoose");
 
 const exportPdfReport = async (req, res) => {
   try {
     const [analytics] = await History.aggregate([
       {
         $match: {
-          user: req.user.id,
+          user: new mongoose.Types.ObjectId(req.user.id),
         },
       },
       {
