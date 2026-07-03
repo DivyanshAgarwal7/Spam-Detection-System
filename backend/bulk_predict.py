@@ -5,6 +5,20 @@ from flask import Blueprint, request, jsonify, current_app, send_file
 
 bulk_predict_bp = Blueprint("bulk_predict", __name__)
 
+# This blueprint relies on the Limiter instance created in backend/api.py.
+limiter = None
+
+
+
+
+def _get_limiter():
+    # `api.py` creates and attaches the Limiter instance to the Flask app.
+    limiter = getattr(current_app, "limiter", None)
+    if limiter is None:
+        raise RuntimeError("Rate limiter not initialized")
+    return limiter
+
+
 def parse_and_predict_file(file):
     # Check file extension
     filename = file.filename.lower() if file.filename else ""
@@ -85,7 +99,10 @@ def parse_and_predict_file(file):
         return None, f"Model prediction error: {str(e)}"
 
 @bulk_predict_bp.route("/bulk-predict", methods=["POST"])
+@limiter.limit("50 per minute")
 def bulk_predict():
+
+
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     

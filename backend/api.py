@@ -19,6 +19,9 @@ from filelock import FileLock
 import requests
 from routes.analytics import analytics_bp
 from routes.analytics import record_scan
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 
 # Try to import NLTK for stopwords (optional)
 try:
@@ -48,6 +51,24 @@ app = Flask(__name__)
 
 xai_engine = ExplanationEngine()
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
+
+# ── Rate limiting (ML inference protection) ──────────────────────────────────
+# Limit expensive prediction endpoints per client IP to mitigate CPU spikes.
+# Default: ~50 predictions per minute per IP.
+PREDICT_RATE_LIMIT = os.getenv("PREDICT_RATE_LIMIT", "50 per minute")
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[PREDICT_RATE_LIMIT],
+)
+
+# Flask-Limiter uses a default 429 HTML response; standardize to JSON.
+@limiter.error_handler(429)
+def ratelimit_handler(e):
+    return jsonify({"error": "Too Many Requests", "rate_limit": PREDICT_RATE_LIMIT}), 429
+
+
 
 # Shared secret that the trusted Node/Express backend attaches to every request
 # (see the axios interceptor in server.js). Enforcing it on every ML API call
@@ -223,7 +244,9 @@ def health():
 
 
 @app.route("/predict", methods=["POST"])
+@limiter.limit(PREDICT_RATE_LIMIT)
 def predict():
+
     try:
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
