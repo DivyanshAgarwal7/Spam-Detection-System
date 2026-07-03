@@ -46,6 +46,41 @@ app.add_middleware(
 )
 
 # ── Logging Middleware ────────────────────────────────────────────────────────
+import os
+import logging
+from fastapi.responses import JSONResponse
+
+# ── Internal secret gate ──────────────────────────────────────────────────────
+INTERNAL_SECRET_MIN_LENGTH = 32
+
+def _load_internal_secret() -> str:
+    secret = os.getenv("INTERNAL_SECRET")
+    if not secret:
+        raise RuntimeError(
+            "INTERNAL_SECRET is not set. This shared secret authenticates "
+            "requests from the trusted backend and is mandatory. Generate "
+            "one with `python -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
+            "and set it (identically) for both the Node and FastAPI services."
+        )
+    if len(secret) < INTERNAL_SECRET_MIN_LENGTH:
+        raise RuntimeError(
+            f"INTERNAL_SECRET is too short ({len(secret)} characters); it must be at least {INTERNAL_SECRET_MIN_LENGTH} characters."
+        )
+    return secret
+
+INTERNAL_SECRET = _load_internal_secret()
+PUBLIC_PATHS = {"/", "/health"}
+
+@app.middleware("http")
+async def enforce_internal_secret(request: Request, call_next):
+    # Allow CORS preflight and public health checks
+    if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    provided = request.headers.get("X-Internal-Secret")
+    if not provided or provided != INTERNAL_SECRET:
+        return JSONResponse(status_code=403, content={"error": "Forbidden: requests must originate from the trusted backend"})
+    return await call_next(request)
+
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.time()
