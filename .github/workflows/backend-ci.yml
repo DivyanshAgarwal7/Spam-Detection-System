@@ -27,7 +27,12 @@ jobs:
         cache-dependency-path: ./backend/package-lock.json
 
     - name: Install Dependencies
-      run: npm ci
+      run: |
+        if [ -f package-lock.json ]; then
+          npm ci
+        else
+          npm install
+        fi
 
     - name: Execute Test Suite
       run: npm test
