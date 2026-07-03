@@ -299,7 +299,8 @@ const dispatchWebhook = async (userId, payload) => {
 
 // Protected: only authenticated users can predict
 // ---> NEW: Added `checkCache` middleware here! <---
-app.post("/predict", predictLimiter, protect, checkCache, async (req, res) => {
+// ---> NEW: Added `checkCache` middleware here! <---
+app.post("/predict", predictLimiter, protect, async (req, res) => {
   try {
     console.log("Reached /predict");
     const { text, type, sender, confidence_threshold } = req.body;
@@ -393,11 +394,6 @@ app.post("/predict", predictLimiter, protect, checkCache, async (req, res) => {
           rule_applied: rule.type
         };
         
-        // Cache this rule match result too!
-        if (req.cacheKey) {
-          setCache(req.cacheKey, ruleResult).catch(err => console.error("Cache Save Error:", err));
-        }
-        
         return res.json(ruleResult);
       }
     }
@@ -438,14 +434,25 @@ app.post("/predict", predictLimiter, protect, checkCache, async (req, res) => {
         rule_applied: keywordMatch.type,
       };
 
-      if (req.cacheKey) {
-        setCache(req.cacheKey, kwResult).catch(err => console.error("Cache Save Error:", err));
-      }
-
       return res.json(kwResult);
     }
 
     console.log("Calling Flask...");
+
+    // Check ML Cache globally before calling Flask
+    const cacheKey = `spam_cache:${require('crypto').createHash('sha256').update(text).digest('hex')}`;
+    const { redisClient } = require("./middleware/cacheMiddleware");
+    if (redisClient && redisClient.status === 'ready') {
+      try {
+        const cachedResult = await redisClient.get(cacheKey);
+        if (cachedResult) {
+          console.log('🚀 Cache Hit! Returning data from Redis.');
+          return res.status(200).json(JSON.parse(cachedResult));
+        }
+      } catch (cacheErr) {
+        console.error('Redis Get Cache Error:', cacheErr.message);
+      }
+    }
 
     let apiUrl =
       process.env.VITE_ML_API_URI ||
@@ -483,30 +490,27 @@ app.post("/predict", predictLimiter, protect, checkCache, async (req, res) => {
       console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
     }
 
-    const resultData = response.data;
+      const finalResponse = response.data;
+      if (typeof finalResponse.confidence === "number") {
+        finalResponse.confidence = Math.round(finalResponse.confidence * 100) / 100;
+      }
 
-    // ---> NEW: Asynchronously Save ML Result to Redis Cache <---
-    if (req.cacheKey) {
-      setCache(req.cacheKey, resultData).catch(err => console.error("Cache Save Error:", err));
-    }
+      setCache(cacheKey, finalResponse).catch(err => console.error("Cache Save Error:", err));
 
-    return res.json(resultData);
+      // ---> NEW: Trigger Webhook if threat is high risk
+      const predictionLabel = finalResponse.prediction ? finalResponse.prediction.toLowerCase() : '';
+      const confidenceScore = finalResponse.confidence || 0;
+      
+      if (['spam', 'malicious', 'smishing', 'phishing'].includes(predictionLabel) || confidenceScore > 0.90) {
+        dispatchWebhook(req.user.id, {
+          input_text: text,
+          type: type,
+          prediction: predictionLabel,
+          confidence: confidenceScore
+        });
+      }
 
-    // ---> NEW: Trigger Webhook if threat is high risk
-    const predictionLabel = response.data.prediction ? response.data.prediction.toLowerCase() : '';
-    const confidenceScore = response.data.confidence || 0;
-    
-    if (['spam', 'malicious', 'smishing', 'phishing'].includes(predictionLabel) || confidenceScore > 0.90) {
-      dispatchWebhook(req.user.id, {
-        input_text: text,
-        type: type,
-        prediction: predictionLabel,
-        confidence: confidenceScore
-      });
-    }
-    
-
-    res.json(response.data);
+      return res.json(finalResponse);
   } catch (error) {
     Sentry.captureException(error, {
       tags: {
