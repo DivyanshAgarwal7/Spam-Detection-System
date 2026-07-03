@@ -138,26 +138,28 @@ def load_data():
 
 import threading
 import time
+import hashlib
+import json
+from collections import OrderedDict
 
-# In-process cache for spam insights computations.
-# Without this, every /spam-insights request re-loads CSVs and re-tokenizes the dataset.
-_CACHE_LOCK = threading.Lock()
+# Configuration
+_MAX_CACHE_ENTRIES = int(os.getenv("SPAM_INSIGHTS_MAX_CACHE_ENTRIES", "5"))
 _CACHE_TTL_SECONDS = int(os.getenv("SPAM_INSIGHTS_CACHE_TTL_SECONDS", "60"))
 
-# Cache structure:
-# {
-#   "expires_at": float,
-#   "mtimes": {"feedback": float|None, "dataset": float|None},
-#   "messages": list,
-#   "aggregates": { ... precomputed results ... }
-# }
-_CACHE = {
-    "expires_at": 0.0,
-    "mtimes": {},
-    "messages": [],
-    "aggregates": {},
-}
+# Helper to compute a lightweight file hash based on size and mtime
+def _hash_file(path: str) -> str:
+    try:
+        stat = os.stat(path)
+        identifier = f"{stat.st_size}-{int(stat.st_mtime)}"
+        return hashlib.sha256(identifier.encode()).hexdigest()
+    except OSError:
+        return ""
 
+# In‑process cache holding multiple entries identified by a source hash
+_CACHE_LOCK = threading.Lock()
+_CACHE = {
+    "entries": OrderedDict()  # source_hash -> {"expires_at", "mtimes", "messages", "aggregates"}
+}
 
 def _get_source_paths():
     base_dir = os.path.dirname(__file__)
@@ -264,55 +266,58 @@ def _compute_aggregates(messages):
     aggregates["category_indicators"] = category_indicators
     return aggregates
 
-
 def _get_cached_aggregates():
     feedback_path, dataset_path = _get_source_paths()
     feedback_mtime = _get_mtime_or_none(feedback_path)
     dataset_mtime = _get_mtime_or_none(dataset_path)
-
+    source_hash = _hash_file(feedback_path) + "-" + _hash_file(dataset_path)
     now = time.time()
 
-    # Quick check without locking (best-effort). If it looks fresh, return.
-    if _CACHE.get("expires_at", 0.0) > now:
-        if _CACHE.get("mtimes", {}).get("feedback") == feedback_mtime and _CACHE.get("mtimes", {}).get("dataset") == dataset_mtime:
-            return _CACHE.get("aggregates", {})
+    # Quick check without lock
+    entry = _CACHE["entries"].get(source_hash)
+    if entry and entry.get("expires_at", 0) > now:
+        if entry.get("mtimes", {}).get("feedback") == feedback_mtime and entry.get("mtimes", {}).get("dataset") == dataset_mtime:
+            return entry.get("aggregates", {})
 
+    # Acquire lock to recompute if needed
     with _CACHE_LOCK:
-        now = time.time()
         # Re-check under lock
-        if _CACHE.get("expires_at", 0.0) > now:
-            if _CACHE.get("mtimes", {}).get("feedback") == feedback_mtime and _CACHE.get("mtimes", {}).get("dataset") == dataset_mtime:
-                return _CACHE.get("aggregates", {})
+        entry = _CACHE["entries"].get(source_hash)
+        if entry and entry.get("expires_at", 0) > now:
+            if entry.get("mtimes", {}).get("feedback") == feedback_mtime and entry.get("mtimes", {}).get("dataset") == dataset_mtime:
+                return entry.get("aggregates", {})
 
         messages = load_data()
-        # If dataset is tiny, keep old behavior: fallback will be computed in get_spam_insights.
         aggregates = _compute_aggregates(messages) if len(messages) >= 5 else {}
-
-
-        _CACHE["expires_at"] = now + _CACHE_TTL_SECONDS
-        _CACHE["mtimes"] = {"feedback": feedback_mtime, "dataset": dataset_mtime}
-        _CACHE["messages"] = messages
-        _CACHE["aggregates"] = aggregates
+        new_entry = {
+            "expires_at": now + _CACHE_TTL_SECONDS,
+            "mtimes": {"feedback": feedback_mtime, "dataset": dataset_mtime},
+            "messages": messages,
+            "aggregates": aggregates,
+        }
+        # Insert/replace entry
+        _CACHE["entries"][source_hash] = new_entry
+        # Evict oldest if exceeding max entries
+        while len(_CACHE["entries"]) > _MAX_CACHE_ENTRIES:
+            _CACHE["entries"].popitem(last=False)
         return aggregates
-
 
 def get_spam_insights(limit=10, category=None):
     """Analyzes message data and returns top keywords, phrases, recent terms, and indicators."""
-    # Serve from cache to avoid repeated CSV I/O + tokenization.
-    aggregates = _CACHE.get("aggregates") if _CACHE.get("aggregates") else {}
-    messages = _CACHE.get("messages") if _CACHE.get("messages") else None
+    # Ensure cache is populated and retrieve the appropriate entry
+    feedback_path, dataset_path = _get_source_paths()
+    source_hash = _hash_file(feedback_path) + "-" + _hash_file(dataset_path)
+    entry = _CACHE["entries"].get(source_hash)
+    if not entry:
+        aggregates = _get_cached_aggregates()
+        entry = _CACHE["entries"].get(source_hash)
+    else:
+        aggregates = entry.get("aggregates", {})
+    messages = entry.get("messages", []) if entry else []
 
-    if messages is None or len(messages) < 5 or not aggregates:
-        # Ensure cache is populated at least once.
-        _get_cached_aggregates()
-        aggregates = _CACHE.get("aggregates") or {}
-        messages = _CACHE.get("messages") or []
-
-    # If no data exists, output fallback indicators
     if len(messages) < 5:
-
+        # Fallback logic (unchanged)
         if category:
-
             cat_lower = category.lower()
             if cat_lower in FALLBACK_KEYWORDS:
                 top_k = FALLBACK_KEYWORDS[cat_lower][:limit]
