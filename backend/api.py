@@ -351,31 +351,39 @@ def predict():
             prediction = model.predict(text_vector)
             final_output = label_encoder.inverse_transform(prediction)[0]
 
-        # Get probability/confidence from model
-        confidence = 95.0  # default fallback percentage
+        confidence_score = 95.0  # fallback percentage
+        decision_score = None
         try:
             active_model = url_model if input_type == "url" else model
             if hasattr(active_model, "predict_proba"):
                 proba = active_model.predict_proba(text_vector)
-                confidence = round(float(max(proba[0])) * 100, 2)
+                confidence_score = round(float(max(proba[0])) * 100, 2)
+                # Decision score is the raw distance for the winning class
+                decision = active_model.decision_function(text_vector)
+                if isinstance(decision, np.ndarray):
+                    decision_score = float(np.max(np.abs(decision)))
+                else:
+                    decision_score = float(abs(decision))
             elif hasattr(active_model, "decision_function"):
                 decision = active_model.decision_function(text_vector)
                 if isinstance(decision, np.ndarray):
-                    score = float(np.max(np.abs(decision)))
+                    decision_score = float(np.max(np.abs(decision)))
                 else:
-                    score = float(abs(decision))
-                prob = 1.0 / (1.0 + np.exp(-score))
-                confidence = round(prob * 100, 2)
+                    decision_score = float(abs(decision))
+                # Convert to pseudo‑probability
+                prob = 1.0 / (1.0 + np.exp(-decision_score))
+                confidence_score = round(prob * 100, 2)
         except Exception:
-            confidence = 0.0
+            confidence_score = 0.0
+            decision_score = None
 
         # ─── DETERMINE CONFIDENCE LEVEL ───────────────────────────────
 
-        if confidence >= 80:
+        if confidence_score >= 80:
             confidence_level = "high"
             level_color = "green"
             level_emoji = "🟢"
-        elif confidence >= 60:
+        elif confidence_score >= 60:
             confidence_level = "medium"
             level_color = "yellow"
             level_emoji = "🟡"
@@ -415,8 +423,9 @@ def predict():
         }
         if translated:
             response_data["translated_text"] = text
-        if confidence is not None:
-            response_data["confidence"] = confidence
+        response_data["confidence_score"] = confidence_score
+        response_data["decision_score"] = decision_score
+        response_data["confidence_level"] = confidence_level
 
         return jsonify(response_data)
 

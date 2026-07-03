@@ -92,19 +92,27 @@ def predict(body: PredictIn):
         # FIX: Convert class index → string label using the label encoder
         label = label_encoder.inverse_transform([raw_prediction])[0]
 
-        # ENHANCEMENT: Return a confidence score.
-        # LinearSVC does not support predict_proba(); use decision_function()
-        # instead. The score for each class is its distance from the boundary —
-        # a higher value means the model is more certain of that class.
-        scores = model.decision_function(vectorized_text)[0]
-        confidence = round(float(np.max(scores)), 4)
-
-        # Backward compatible keys: the Flask API returns `result`, while some
-        # frontends expect `res.data.result`. Keep both.
+        # Compute decision scores and confidence
+        decision_scores = model.decision_function(vectorized_text)[0]
+        # Decision score is the raw distance for the winning class
+        decision_score = float(np.max(np.abs(decision_scores)))
+        # Convert to pseudo‑probability (same approach as Flask)
+        prob = 1.0 / (1.0 + np.exp(-decision_score))
+        confidence_score = round(prob * 100, 2)
+        # Determine confidence level
+        if confidence_score >= 80:
+            confidence_level = "high"
+        elif confidence_score >= 60:
+            confidence_level = "medium"
+        else:
+            confidence_level = "low"
+        # Return response with standardized fields
         return {
-            "result": label,           # e.g. "ham", "spam", "smishing"
-            "prediction": label,      # legacy key
-            "confidence": confidence, # e.g. 1.2345
+            "result": label,            # e.g. "ham", "spam", "smishing"
+            "prediction": label,       # legacy key
+            "confidence_score": confidence_score,
+            "decision_score": decision_score,
+            "confidence_level": confidence_level,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
