@@ -1267,24 +1267,70 @@ app.get('/api/stats', protect, async (req, res) => {
     }
 });
 
+
+
 // ========================================
-// GRACEFUL SHUTDOWN
+// GRACEFUL SHUTDOWN LOGIC
 // ========================================
 
+// 1. Keep track of active connections
+const connections = new Set();
+server.on('connection', (connection) => {
+  connections.add(connection);
+  connection.on('close', () => connections.delete(connection));
+});
+
+// 2. The Graceful Shutdown Function
 const gracefulShutdown = async (signal) => {
-  console.log(`\nReceived ${signal}. Closing server...`);
-  server.close(async () => {
-    console.log('HTTP server closed.');
-    try {
-      await mongoose.disconnect();
-      console.log('MongoDB connection closed.');
-    } catch (err) {
-      console.error('Error closing MongoDB connection:', err);
+  console.log(`\n🛑 [${signal}] signal received: closing HTTP server...`);
+  
+  let forceClosed = false;
+
+  // 15-Second Fallback Timeout
+  const timeoutId = setTimeout(async () => {
+    forceClosed = true;
+    console.error('⚠️ [Timeout] Could not close connections in time, forcefully shutting down!');
+    
+    // Destroy all active connections forcefully
+    for (const connection of connections) {
+      connection.destroy();
     }
-    console.log('Shutdown complete. Exiting process.');
-    process.exit(0);
+    
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.disconnect();
+    }
+    process.exit(1);
+  }, 15000); // 15 seconds grace period
+
+  // Close server to reject NEW requests
+  server.close(async () => {
+    if (forceClosed) return; 
+    
+    clearTimeout(timeoutId);
+    console.log('✅ HTTP server closed. All active requests completed normally.');
+    
+    try {
+      if (mongoose.connection.readyState === 1) {
+        await mongoose.disconnect();
+        console.log('✅ MongoDB disconnected successfully.');
+      }
+      process.exit(0);
+    } catch (err) {
+      console.error('❌ Error during MongoDB disconnection:', err);
+      process.exit(1);
+    }
   });
+
+  // Safely close idle connections immediately to speed up shutdown
+  if (server.closeIdleConnections) {
+    server.closeIdleConnections();
+  }
 };
+
+// 3. Assign the listeners
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+module.exports = { app, applyRulesToEmails };
 
 process.on('SIGINT', () => process.exit(0));
 // Protected: get the current IMAP connection status for the logged-in user
@@ -1460,6 +1506,17 @@ app.get('/api/history/search',protect, async(req,res) => {
         });
     }
 });
+// ========================================
+// START SERVER
+// ========================================
+
+// const PORT = config.port;
+// const server = app.listen(PORT, () => {
+//   const totalTime = Date.now() - SERVER_START_TIME;
+//   displayBanner();
+//   console.log(`⏱️ Total startup time: ${totalTime}ms`);
+// });
+
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
