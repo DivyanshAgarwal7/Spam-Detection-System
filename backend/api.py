@@ -566,7 +566,7 @@ def analyze_email_header():
             data = request.get_json(silent=True) or {}
             headers = data.get("headers", "")
 
-        if not headers or not headers.strip():
+        if not headers or not isinstance(headers, str) or not headers.strip():
             return jsonify({"error": "No email headers provided"}), 400
             
         analysis = analyze_headers(headers)
