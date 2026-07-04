@@ -126,4 +126,4 @@ const setCache = async (key, data) => {
   }
 };
 
-module.exports = { checkCache, setCache, redisClient };
+module.exports = { checkCache, setCache, redisClient, preventCacheStampede };
