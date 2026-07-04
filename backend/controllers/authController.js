@@ -34,7 +34,14 @@ const register = async (req, res) => {
     }
 
     const { username, email, password } = req.body;
-
+    
+    if (!username || !email || !password) {
+      return res.status(200).json({
+        success: false,
+        message: "Validation failed",
+        error: "Username, email, and password are required."
+      });
+    }
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       const field = existingUser.email === email ? 'Email' : 'Username';
