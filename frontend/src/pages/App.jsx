@@ -20,6 +20,7 @@ import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
 import Chatbot from "../components/Chatbot";
 import Footer from "../components/Footer";
+import URLPreview from '../components/URLPreview';
 import InstallAppButton from "../components/InstallAppButton";
 import RulesManager from "../components/RulesManager";
 
@@ -55,6 +56,14 @@ function App() {
   });
 
   const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Detect URLs in text
+  const detectURLs = (text) => {
+    if (!text) return [];
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+     const matches = text.match(urlRegex);
+      return matches || [];
+    };
 
   const playSpamSound = () => {
     if (!soundEnabled) return;
@@ -675,6 +684,12 @@ const analyzeEmojiSentiment = (text) => {
                         {result === "Error" && "⚠️ Error"}
                       </span>
                     </div>
+                     
+                    <URLPreview url={text} darkMode={isDark}>
+                      <span className="text-blue-500 underline cursor-pointer">
+                       {text}
+                      </span>
+                    </URLPreview>
 
                     {confidence !== null && result !== "Error" && (
                       <>
