@@ -21,8 +21,17 @@ const HistoryArchive = require('../models/HistoryArchive');
         const oldRecords = await History.find({ createdAt: { $lt: ninetyDaysAgo } }).session(session);
 
         if (oldRecords.length > 0) {
+            // Map the old records to the new schema
+            const mappedRecords = oldRecords.map(record => ({
+                userId: record.user,
+                message: record.query,
+                prediction: record.prediction,
+                confidenceScore: record.confidence,
+                createdAt: record.createdAt
+            }));
+
             // 2. Bulk insert them into the Archive collection
-            await HistoryArchive.insertMany(oldRecords, { session });
+            await HistoryArchive.insertMany(mappedRecords, { session });
             
             // 3. Bulk delete them from the main History collection
             await History.deleteMany({ createdAt: { $lt: ninetyDaysAgo } }, { session });
