@@ -64,7 +64,7 @@ def test_predict_allowed_with_valid_secret(client):
     assert res.get_json()["result"] in {"spam", "ham", "smishing", "unknown"}
 
 
-@pytest.mark.parametrize("path", ["/importance", "/api/wordcloud", "/spam-insights"])
+@pytest.mark.parametrize("path", ["/importance", "/api/wordcloud", "/spam-insights", "/api/word-of-the-day"])
 def test_other_ml_routes_rejected_without_secret(client, path):
     res = client.get(path)
     assert res.status_code == 403

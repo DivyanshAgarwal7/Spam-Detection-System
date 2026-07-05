@@ -278,6 +278,23 @@ const analyzeEmojiSentiment = (text) => {
   };
 };
 
+  const fetchWordOfTheDay = async () => {
+    try {
+      setWordLoading(true);
+      const res = await api.get('/api/word-of-the-day');
+      if (res.data.success) {
+        setWordOfDay(res.data.data);
+      } else {
+        setWordOfDay(null);
+      }
+    } catch (err) {
+      console.error("Error fetching word of the day:", err);
+      setWordOfDay(null);
+    } finally {
+      setWordLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchWordOfTheDay();
   }, []);

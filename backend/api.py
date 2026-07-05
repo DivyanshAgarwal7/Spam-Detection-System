@@ -183,9 +183,146 @@ label_encoder = joblib.load(LABEL_ENCODER_PATH)
 from xai_service import XAIService
 xai_service = XAIService(model=model, vectorizer=vectorizer, label_encoder=label_encoder)
 
-# In-memory storage for spam words (for demo purposes)
-# In production, use a database
-spam_words_storage = {}
+# SQLite Persistent Storage for spam words
+import sqlite3
+from datetime import datetime, timezone
+
+def _db_connection():
+    conn = sqlite3.connect(imap_store.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_spam_words_db():
+    with _db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spam_word_frequencies (
+                word TEXT NOT NULL,
+                day TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (word, day)
+            )
+            """
+        )
+        conn.commit()
+
+def increment_spam_word_frequency(word):
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    with _db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO spam_word_frequencies (word, day, count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(word, day) DO UPDATE SET count = count + 1
+            """,
+            (word, day)
+        )
+        conn.commit()
+
+def get_db_wordcloud_data():
+    with _db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT word, SUM(count) as total_count
+            FROM spam_word_frequencies
+            GROUP BY word
+            ORDER BY total_count DESC
+            LIMIT 50
+            """
+        ).fetchall()
+        return [{"word": row["word"], "count": row["total_count"]} for row in rows]
+
+SPAM_WORD_METADATA = {
+    "free": {
+        "definition": "Offered without cost or payment, frequently used in spam messages to lure users into clicking links.",
+        "context": "Get FREE access now! No credit card required.",
+        "tips": "Be highly skeptical of 'free' offers; they are often bait for phishing, subscriptions, or malware."
+    },
+    "win": {
+        "definition": "Be successful or victorious in a contest or raffle, typically fake in spam/phishing messages.",
+        "context": "You have won a $1000 Walmart Gift Card! Claim here.",
+        "tips": "If you didn't enter a contest, you didn't win anything. Never enter personal details to claim a 'prize'."
+    },
+    "urgent": {
+        "definition": "Requiring immediate action or attention, used to induce panic and quick, unthinking decisions.",
+        "context": "URGENT: Your account has been compromised. Verify your details within 24 hours.",
+        "tips": "Phishers use artificial urgency to make you act before you think. Verify independently with the service."
+    },
+    "prize": {
+        "definition": "An award given to the winner of a competition, often used as bait in promotional spam.",
+        "context": "Your special prize is waiting! Click here to claim.",
+        "tips": "Legitimate organizations don't send SMS/emails with sketchy links to claim randomly awarded prizes."
+    },
+    "cash": {
+        "definition": "Money in coins or notes, commonly promised in financial spam and advance-fee fraud schemes.",
+        "context": "Earn quick cash from home! Make $500/day.",
+        "tips": "Beware of 'get rich quick' or easy work-from-home offers. They are often scams or money-laundering operations."
+    },
+    "offer": {
+        "definition": "A proposal or bid, frequently restricted in time to force immediate response.",
+        "context": "Exclusive limited time offer: Save 90% on this software.",
+        "tips": "Always check the domain of the offer. Avoid clicking promotional links from unknown senders."
+    },
+    "guaranteed": {
+        "definition": "Formally assured, commonly used in deceptive promises of loans, earnings, or cures.",
+        "context": "Guaranteed approval for home loans up to $50,000.",
+        "tips": "No financial service can guarantee approval without screening. This is a common trap for upfront fees."
+    },
+    "click": {
+        "definition": "Press a link or button, directing users to external phishing or credential harvesting pages.",
+        "context": "Click this link to restore access to your banking portal.",
+        "tips": "Never click direct links in unexpected emails/texts requesting login credentials. Go to the site manually."
+    }
+}
+
+def get_word_of_the_day_data():
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    word_row = None
+    with _db_connection() as conn:
+        word_row = conn.execute(
+            """
+            SELECT word, SUM(count) as total_count
+            FROM spam_word_frequencies
+            WHERE day = ?
+            GROUP BY word
+            ORDER BY total_count DESC
+            LIMIT 1
+            """,
+            (day,)
+        ).fetchone()
+        
+        if not word_row:
+            word_row = conn.execute(
+                """
+                SELECT word, SUM(count) as total_count
+                FROM spam_word_frequencies
+                GROUP BY word
+                ORDER BY total_count DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            
+    if word_row:
+        word = word_row["word"]
+        count = word_row["total_count"]
+    else:
+        word = "free"
+        count = 0
+        
+    metadata = SPAM_WORD_METADATA.get(word, {
+        "definition": "A keyword commonly appearing in unsolicited messages, flagged by the system as a potential spam indicator.",
+        "context": f"Important notification: Please review this {word}.",
+        "tips": f"Treat messages containing '{word}' with caution. Verify the sender's identity and watch out for unsolicited requests."
+    })
+    
+    return {
+        "word": word,
+        "count": count if count > 0 else None,
+        "definition": metadata["definition"],
+        "context": metadata["context"],
+        "tips": metadata["tips"]
+    }
+
 app.model = model
 app.vectorizer = vectorizer
 app.label_encoder = label_encoder
@@ -401,7 +538,10 @@ def predict():
         if final_output == "spam":
             words = extract_words(text)
             for word in words:
-                spam_words_storage[word] = spam_words_storage.get(word, 0) + 1
+                try:
+                    increment_spam_word_frequency(word)
+                except Exception as e:
+                    print(f"[db-wordcloud] failed to increment word '{word}': {e}")
 
        # Log prediction with Trace ID
         # Record the scan now that the prediction label is known.
@@ -460,12 +600,13 @@ def extract_words(text):
 
 
 def get_wordcloud_data():
-    """Return stored spam word frequencies."""
-    if spam_words_storage:
-        # Sort by frequency and return top 50
-        sorted_words = sorted(spam_words_storage.items(), key=lambda x: x[1], reverse=True)
-        return [{"word": w, "count": c} for w, c in sorted_words[:50]]
-    return None
+    """Return stored spam word frequencies from database."""
+    try:
+        data = get_db_wordcloud_data()
+        return data if data else None
+    except Exception as e:
+        print(f"[db-wordcloud] failed to get wordcloud data: {e}")
+        return None
 
 
 # Common spam words (fallback sample data)
@@ -504,6 +645,24 @@ def get_wordcloud():
             "source": "sample"
         })
         
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/api/word-of-the-day', methods=['GET'])
+def get_word_of_the_day():
+    """
+    Get the spam word of the day with metadata (definition, context, safety tips).
+    """
+    try:
+        word_data = get_word_of_the_day_data()
+        return jsonify({
+            "success": True,
+            "data": word_data
+        })
     except Exception as e:
         return jsonify({
             "success": False,
@@ -762,6 +921,7 @@ def scan_emails_route():
 
 
 imap_store.init_db()
+init_spam_words_db()
 scheduler = BackgroundScheduler()
 scheduler.start()
 
