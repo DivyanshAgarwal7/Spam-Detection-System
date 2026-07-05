@@ -272,6 +272,8 @@ def health():
 @app.route("/predict", methods=["POST"])
 @limiter.limit(PREDICT_RATE_LIMIT)
 def predict():
+    # Initialize final_output to prevent NameError/UnboundLocalError in case of early/conditional references
+    final_output = None
 
     try:
         data = request.get_json(silent=True)

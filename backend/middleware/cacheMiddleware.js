@@ -12,7 +12,8 @@ const preventCacheStampede = (req, res, next) => {
 
     // Generate a simple cache key based on the input text
     const text = req.body.text.trim();
-    const cacheKey = Buffer.from(text).toString('base64').substring(0, 64);
+    const crypto = require('crypto');
+    const cacheKey = crypto.createHash('sha256').update(text).digest('hex');
 
     // If another request is currently fetching this exact same data, WAIT for its promise
     if (pendingRequests.has(cacheKey)) {
@@ -126,5 +127,5 @@ const setCache = async (key, data) => {
   }
 };
 
-module.exports = { checkCache, setCache, redisClient, preventCacheStampede };
-module.exports = { checkCache, setCache, redisClient, generateCacheKey };
+module.exports = { checkCache, setCache, redisClient, preventCacheStampede,generateCacheKey };
+

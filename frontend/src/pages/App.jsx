@@ -967,5 +967,5 @@ const analyzeEmojiSentiment = (text) => {
       <Chatbot />
     </div>
   );
-
+}
 export default App;

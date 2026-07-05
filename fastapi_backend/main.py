@@ -71,13 +71,15 @@ def _load_internal_secret() -> str:
 INTERNAL_SECRET = _load_internal_secret()
 PUBLIC_PATHS = {"/", "/health"}
 
+import secrets
+
 @app.middleware("http")
 async def enforce_internal_secret(request: Request, call_next):
     # Allow CORS preflight and public health checks
     if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
         return await call_next(request)
     provided = request.headers.get("X-Internal-Secret")
-    if not provided or provided != INTERNAL_SECRET:
+    if not provided or not secrets.compare_digest(provided, INTERNAL_SECRET):
         return JSONResponse(status_code=403, content={"error": "Forbidden: requests must originate from the trusted backend"})
     return await call_next(request)
 
