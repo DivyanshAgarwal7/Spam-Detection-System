@@ -17,7 +17,7 @@ const axios = require("axios");
 // Initialize background jobs
 require('./jobs/archivalCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
-
+const validationMessages = require("./utils/validationMessages");
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
 const startupLogs = [];
@@ -280,6 +280,7 @@ app.get("/health", async (req, res) => {
 
 // ---> NEW: Asynchronous Webhook Dispatcher (For Issue #430 & SSRF fix)
 const net = require('net');
+const { error } = require('console');
 
 const isSafeWebhookUrl = (webhookUrl) => {
   try {
@@ -346,38 +347,65 @@ app.post(
     console.log("Received:", text, type, sender);
 
     // Check 1: fields must exist
-    if (!text || !type) {
-      return res.status(400).json({ error: "Text and type are required" });
+    if (!text) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        error: validationMessages.textRequired
+      });
+    }
+
+    if (!type) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        error: validationMessages.typeRequired
+      });
     }
 
     // Check 2: must be strings
     if (typeof text !== "string" || typeof type !== "string") {
-      return res.status(400).json({ error: "Text and type must be strings." });
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        error: "Text and type must be strings." });
     }
 
     if (sender !== undefined && typeof sender !== "string") {
-      return res.status(400).json({ error: "Sender must be a string." });
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        error: validationMessages.senderMustBeString
+       });
     }
 
     // Check 3: must not be empty or only whitespace
     if (text.trim().length === 0) {
       return res
         .status(400)
-        .json({ error: "Text must not be empty or whitespace." });
+        .json({
+          success: false,
+          message: "Validation failed",
+          error: validationMessages.textEmpty
+});
     }
 
     // Check 4: validate type is one of the accepted values
     const allowedTypes = ["sms", "email", "url", "message"];
     if (!allowedTypes.includes(type.toLowerCase())) {
       return res.status(400).json({
-        error: `Invalid type. Allowed values are: ${allowedTypes.join(", ")}.`,
+        success: false,
+        message: "Validation failed",
+        error: validationMessages.invalidType
       });
     }
 
     // Check 5: validate text length
     if (text.trim().length > 5000) {
       return res.status(413).json({
-        error: "Text payload exceeds maximum allowed length of 5000 characters.",
+        success: false,
+        message: "Payload too large",
+        error: validationMessages.maxTextLength
       });
     }
 
@@ -586,7 +614,11 @@ app.post("/feedback", protect, async (req, res) => {
     if (!text || !correct_label) {
       return res
         .status(400)
-        .json({ error: "text and correct_label are required" });
+        .json({
+          success: false,
+          message: "Validation failed",
+          error: validationMessages.feedbackFieldsRequired
+});
     }
 
     const response = await axios.post(`${ML_API_BASE}/feedback`, {
@@ -630,7 +662,10 @@ app.post(
         if (req.file.size > 2 * 1024 * 1024) {
           return res
             .status(413)
-            .json({ error: "File size exceeds limit of 2MB" });
+            .json({
+              success: false,
+              message: "Payload too large",
+              error: validationMessages.fileSizeExceeded });
         }
 
         const form = new FormData();
@@ -653,19 +688,30 @@ app.post(
         const { headers } = req.body;
 
         if (!headers) {
-          return res.status(400).json({ error: "Email headers are required" });
+          return res.status(400).json({
+            success: false,
+            message: "Validation failed",
+            error: validationMessages.emailHeadersRequired });
         }
 
         if (typeof headers !== "string") {
           return res
             .status(400)
-            .json({ error: "Email headers must be a string." });
+            .json({
+              success: false,
+              message: "Validation failed",
+              error: validationMessages.emailHeadersString
+             });
         }
 
         if (headers.trim().length === 0) {
           return res
             .status(400)
-            .json({ error: "Email headers must not be empty." });
+            .json({
+              success: false,
+              message: "Validation failed",
+              error: validationMessages.emailHeadersNotEmpty
+             });
         }
 
         const response = await axios.post(
@@ -697,12 +743,20 @@ app.post(
 app.post("/bulk-predict", protect, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        error: validationMessages.fileRequired
+       });
     }
 
     // Check file size
     if (req.file.size > 2 * 1024 * 1024) {
-      return res.status(413).json({ error: "File size exceeds limit of 2MB" });
+      return res.status(413).json({
+        success: false,
+        message: "Payload too large",
+        error: validationMessages.fileSizeExceeded
+       });
     }
 
     const form = new FormData();
@@ -1179,7 +1233,11 @@ app.post("/scan-emails", protect, async (req, res) => {
     if (!provider || (provider !== "gmail" && provider !== "outlook")) {
       return res
         .status(400)
-        .json({ error: "Invalid provider. Must be 'gmail' or 'outlook'." });
+        .json({
+          success: false,
+          message: "Validation failed",
+          error: validationMessages.providerInvalid
+         });
     }
     const response = await axios.post(
       `${ML_API_BASE}/scan-emails`,
@@ -1222,7 +1280,8 @@ app.post("/imap/connect", protect, async (req, res) => {
     if (!email || !password || !host) {
       return res.status(400).json({
         success: false,
-        error: "Email, password, and host are required"
+        message: "Validation failed",
+        error: validationMessages.imapFieldsRequired
       });
     }
 
