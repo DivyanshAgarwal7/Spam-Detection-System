@@ -1034,6 +1034,72 @@ app.get("/gmail/emails", protect, async (req, res) => {
   }
 });
 
+// De-Spamification API
+app.post('/api/despamify', protect, async (req, res) => {
+  try {
+    const { text, tone = 'neutral' } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+    
+    // Simple de-spamification logic
+    let deSpammed = text;
+    
+    const replacements = {
+      'URGENT': 'Someone wants to contact you',
+      'FREE': 'There is an offer',
+      'WIN': 'There is a notification',
+      'PRIZE': 'There is a message about rewards',
+      'CLAIM': 'There is a message for you',
+      'CLICK': 'There is a link to visit',
+      'NOW': 'soon',
+      '!!!': '.',
+      '$$$': '',
+      '100%': '',
+      'GUARANTEED': '',
+      'LIMITED TIME': '',
+      'ACT NOW': '',
+      "DON'T MISS": '',
+      'EXCLUSIVE': '',
+      'YOU WON': 'There is a notification'
+    };
+    
+    // Apply tone adjustments
+    const tonePrefixes = {
+      neutral: '',
+      friendly: 'Hi there! ',
+      formal: 'We would like to inform you that ',
+      casual: 'Hey! '
+    };
+    
+    const prefix = tonePrefixes[tone] || '';
+    
+    for (const [key, value] of Object.entries(replacements)) {
+      deSpammed = deSpammed.replace(new RegExp(key, 'gi'), value);
+    }
+    
+    // Clean up
+    deSpammed = deSpammed.replace(/\s+/g, ' ').trim();
+    deSpammed = prefix + deSpammed;
+    
+    if (!deSpammed || deSpammed.length < 5) {
+      deSpammed = 'Someone wants to contact you about an offer.';
+    }
+    
+    res.json({
+      original: text,
+      deSpammedText: deSpammed,
+      tone: tone,
+      success: true
+    });
+    
+  } catch (error) {
+    console.error('De-spamification error:', error);
+    res.status(500).json({ error: 'Failed to de-spamify message' });
+  }
+}); 
+
 // Protected: Get Outlook auth URL
 app.get("/outlook/auth-url", protect, async (req, res) => {
   try {
