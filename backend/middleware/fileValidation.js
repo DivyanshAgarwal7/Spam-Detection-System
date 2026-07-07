@@ -210,6 +210,11 @@ const validateCSVUpload = (req, res, next) => {
                 rowObj[header.trim()] = sanitizeCSVCell(val);
             });
             rows.push(rowObj);
+
+            // Yield to the event loop every 500 rows to prevent blocking (DoS)
+            if (i % 500 === 0) {
+                await new Promise(resolve => setImmediate(resolve));
+            }
         }
 
         req.parsedCSV = {
