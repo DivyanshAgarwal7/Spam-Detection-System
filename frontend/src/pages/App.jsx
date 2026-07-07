@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import "../App.css";
+import CensorshipMode from '../components/CensorshipMode';
 import FeatureImportance from "../components/FeatureImportance";
 import PredictionExplanation from '../components/PredictionExplanation';
 import PredictionExplanation from "../components/PredictionExplanation";
@@ -42,7 +43,7 @@ function App() {
   const [showDeSpamify,setShowDeSpamify]= useState(false);
   const [wordLoading, setWordLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const[SpamPatternLibrary, setSpamPatternLibrary] = useState(false);
+  const [showPatternLibrary, setShowPatternLibrary] = useState(false);
   const [hasCelebrated, setHasCelebrated] = useState(() => {
     return localStorage.getItem("firstPrediction") === "true";
   });
@@ -909,6 +910,7 @@ const analyzeEmojiSentiment = (text) => {
 
 
                 <FeatureImportance darkMode={isDark} />
+                <CensorshipMode text={text} darkMode={isDark} />
 
                 {/* SPAM WORD OF THE DAY */}
                 {wordOfDay && (

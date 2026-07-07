@@ -150,8 +150,15 @@ const chatLimiter = rateLimit({
  * Predict Rate Limiter
  * Prevents abuse of ML prediction endpoint
  */
-const PREDICT_WINDOW_MS = Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
-const PREDICT_MAX = Number(process.env.PREDICT_RATE_LIMIT_MAX) || 30;
+const PREDICT_WINDOW_MS =
+  Number(process.env.RATE_LIMIT_WINDOW_MS) ||
+  Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) ||
+  15 * 60 * 1000;
+
+const PREDICT_MAX =
+  Number(process.env.RATE_LIMIT_MAX) ||
+  Number(process.env.PREDICT_RATE_LIMIT_MAX) ||
+  100;
 
 const predictLimiter = rateLimit({
   windowMs: PREDICT_WINDOW_MS,
@@ -165,9 +172,12 @@ const predictLimiter = rateLimit({
   },
   handler: (req, res, next, options) => {
     const retryAfterSeconds = Math.ceil(options.windowMs / 1000);
-    res.status(429).json({
+
+    res.setHeader("Retry-After", retryAfterSeconds);
+
+    res.status(options.statusCode).json({
       success: false,
-      error: "Too many predict requests. Please slow down.",
+      error: "Too many prediction requests. Please try again later.",
       retryAfter: retryAfterSeconds,
       limit: options.max,
       remaining: 0,
@@ -240,6 +250,7 @@ const verificationLimiter = rateLimit({
       retryAfter: retryAfterSeconds,
       limit: options.max,
       remaining: 0
+
     });
   }
 });

@@ -17,7 +17,8 @@ const axios = require("axios");
 // Initialize background jobs
 require('./jobs/archivalCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
-const validationMessages = require("./utils/validationMessages");
+const healthRoutes = require("./routes/healthRoutes");
+
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
 const startupLogs = [];
@@ -232,40 +233,18 @@ app.use("/api/auth", authRoutes);
 app.use("/api/history", historyRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/chat", chatRoutes);
+app.get("/health", healthRoutes);
 app.use("/api/rules", ruleRoutes);
 app.use("/api/reports", reportRoutes);
 
 const { protect } = require("./middleware/authMiddleware");
 const { predictLimiter } = require("./middleware/rateLimiter");
 
-// ===== PREDICTION COUNT =====
-app.get('/api/history/count', protect, async (req, res) => {
-  try {
-    const count = await History.countDocuments({ user: req.user.id });
-    res.json({ success: true, count });
-  } catch (error) {
-    console.error('Count error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
 app.get("/", (req, res) => {
   res.send("Node backend running ");
 });
 
 // Health check endpoint (Advanced)
-app.get("/health", async (req, res) => {
-  try {
-    const healthStatus = await getHealthStatus();
-    const statusCode = healthStatus.status === "healthy" ? 200 : 503;
-    res.status(statusCode).json(healthStatus);
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to retrieve health status',
-      error: error.message
-    });
-  }
-});
 
 // ---> NEW: Asynchronous Webhook Dispatcher (For Issue #430 & SSRF fix)
 const net = require('net');
@@ -728,7 +707,7 @@ app.post(
 );
 
 // Protected: Bulk prediction
-app.post("/bulk-predict", protect, upload.single("file"), async (req, res) => {
+app.post("/bulk-predict", predictLimiter, protect, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -789,6 +768,7 @@ app.post("/bulk-predict", protect, upload.single("file"), async (req, res) => {
 // Protected: Export bulk predictions as CSV
 app.post(
   "/bulk-predict/export",
+  predictLimiter,
   protect,
   upload.single("file"),
   async (req, res) => {

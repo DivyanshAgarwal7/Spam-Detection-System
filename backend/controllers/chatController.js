@@ -30,12 +30,28 @@ exports.chatHandler = async (req, res) => {
       { role: "system", content: SYSTEM_PROMPT }
     ];
 
-    if (history && Array.isArray(history)) {
-      const recentHistory = history.slice(-10);
+    const ALLOWED_HISTORY_ROLES = new Set(["user", "assistant"]);
+    const MAX_HISTORY_ITEMS = 10;
+    const MAX_HISTORY_CONTENT_LENGTH = 2000;
+
+    if (Array.isArray(history)) {
+      const recentHistory = history.slice(-MAX_HISTORY_ITEMS);
+
       for (const msg of recentHistory) {
-        if (msg.role && msg.content) {
-          messages.push({ role: msg.role, content: msg.content });
-        }
+        if (!msg || typeof msg !== "object") continue;
+
+        const { role, content } = msg;
+
+        if (!ALLOWED_HISTORY_ROLES.has(role)) continue;
+        if (typeof content !== "string") continue;
+
+        const trimmedContent = content.trim();
+        if (!trimmedContent) continue;
+
+        messages.push({
+          role,
+          content: trimmedContent.slice(0, MAX_HISTORY_CONTENT_LENGTH),
+        });
       }
     }
 

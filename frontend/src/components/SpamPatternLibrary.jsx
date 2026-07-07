@@ -72,7 +72,7 @@ const spamPatterns = [
 const SpamPatternLibrary = ({ isOpen, onClose, darkMode }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedPattern, setSelectedPattern] = useState(null);
-    const [selectedCategory, setSelectedCategory] = useState(null);
+    const [selectedCategory, setSelectedCategory] = useState('All');
 
     const categories = ['All', ...new Set(spamPatterns.map(pattern => pattern.category))];
 

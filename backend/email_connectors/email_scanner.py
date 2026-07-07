@@ -1,4 +1,5 @@
 from flask import current_app
+import numpy as np
 
 try:
     # Import standard headers analyzer if available

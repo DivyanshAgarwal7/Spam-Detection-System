@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 
 const ActivityHeatmap = ({ userId, startDate, endDate }) => {
     const [activityData, setActivityData] = useState([]);
-    const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+    const [currentMonth, setCurrentMonth] = useState(new Date());
     const [selectedDay, setSelectedDay] = useState(null);
     const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -46,7 +46,7 @@ const generateDemoData = () => {
     for (let day = 1; day <= daysInMonth; day++) {
         const  count = Math.floor(Math.random() * 10); // Random count between 0 and 9
         if(count > 0) {
-            const date = new Data(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+            const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
             data[date.toISOString().split('T')[0]] = count;
         }
     }

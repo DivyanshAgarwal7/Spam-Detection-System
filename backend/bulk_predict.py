@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import numpy as np
 from flask import Blueprint, request, jsonify, current_app, send_file
 
 bulk_predict_bp = Blueprint("bulk_predict", __name__)

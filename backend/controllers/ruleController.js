@@ -1,13 +1,11 @@
 const Rule = require("../models/Rule");
 const { validateKeywordPattern } = require("../utils/keywordRules");
+const { getPaginationParams } = require("../utils/pagination");
 
 // Get all rules for the logged-in user
 const getRules = async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = parseInt(req.query.limit) || 100;
-    const safeLimit = Math.min(limit, 100);
-    const skip = (page - 1) * safeLimit;
+    const { page, safeLimit, skip } = getPaginationParams(req.query, 100, 100);
 
     const total = await Rule.countDocuments({ user: req.user.id });
     const rules = await Rule.find({ user: req.user.id })

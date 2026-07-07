@@ -28,4 +28,13 @@ router.delete("/:id", deleteHistoryItem);
 // Clear all history
 router.delete("/", clearHistory);
 
+router.get('/count', protect, async (req, res) => {
+  try {
+    const count = await History.countDocuments({ user: req.user.id });
+    res.json({ success: true, count });
+  } catch (error) {
+    console.error('Count error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 module.exports = router;

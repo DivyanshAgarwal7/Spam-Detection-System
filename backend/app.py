@@ -11,6 +11,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import numpy as np
 
 load_dotenv()
 
