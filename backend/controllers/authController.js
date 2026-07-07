@@ -9,6 +9,10 @@ const sharp = require('sharp');
 const BlacklistedToken = require('../models/BlacklistedToken');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// ============================================
+// TOKEN GENERATION
+// ============================================
+
 const generateToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
@@ -23,9 +27,16 @@ const buildAuthResponse = (user, token) => ({
     email: user.email,
     avatarUrl: user.avatarUrl,
     provider: user.provider,
+    role: user.role || 'user',
   },
 });
 
+// ============================================
+// AUTH CONTROLLERS
+// ============================================
+
+// @desc    Register user
+// @route   POST /api/auth/register
 const register = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -65,6 +76,8 @@ const register = async (req, res) => {
   }
 };
 
+// @desc    Login user
+// @route   POST /api/auth/login
 const login = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -103,6 +116,42 @@ const login = async (req, res) => {
   }
 };
 
+// @desc    Logout user - Blacklist token
+// @route   POST /api/auth/logout
+const logout = async (req, res) => {
+  try {
+    const token = req.token;
+
+    if (!token) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'No token provided for logout.' 
+      });
+    }
+
+    await BlacklistedToken.blacklist(
+      token,
+      req.user._id,
+      'LOGOUT',
+      req.ip || req.connection?.remoteAddress,
+      req.headers['user-agent']
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Successfully logged out. Token revoked.'
+    });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error during logout.' 
+    });
+  }
+};
+
+// @desc    Get current user
+// @route   GET /api/auth/me
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -113,6 +162,8 @@ const getMe = async (req, res) => {
   }
 };
 
+// @desc    Google OAuth login
+// @route   POST /api/auth/google
 const googleLogin = async (req, res) => {
   try {
     const { idToken } = req.body;
@@ -182,6 +233,8 @@ const googleLogin = async (req, res) => {
   }
 };
 
+// @desc    Update user avatar
+// @route   POST /api/auth/avatar
 const updateAvatar = async (req, res) => {
   try {
     if (!req.file) {
@@ -198,19 +251,14 @@ const updateAvatar = async (req, res) => {
 
     const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
 
-    // Clean up old avatar if it exists
-    // Clean up old avatar if it exists
     const currentUser = await User.findById(req.user.id);
-
     if (currentUser && currentUser.avatarUrl && currentUser.avatarUrl.includes('/uploads/')) {
       try {
         const oldFilename = currentUser.avatarUrl.split('/uploads/')[1];
         const oldFilePath = path.join(__dirname, '..', 'uploads', oldFilename);
-
         await fs.promises.access(oldFilePath);
         await fs.promises.unlink(oldFilePath);
       } catch (err) {
-        // Ignore missing files
         if (err.code !== 'ENOENT') {
           console.error('Failed to delete old avatar:', err);
         }
@@ -234,6 +282,8 @@ const updateAvatar = async (req, res) => {
   }
 };
 
+// @desc    Forgot password - Send reset link
+// @route   POST /api/auth/forgot-password
 const forgotPassword = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -244,17 +294,17 @@ const forgotPassword = async (req, res) => {
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user) {
-      // Send a successful response to prevent email enumeration
       return res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
     }
 
-    // Generate token using password hash to make it single-use
     const secret = process.env.JWT_SECRET + user.password;
-    const token = jwt.sign({ id: user._id, email: user.email }, secret, { expiresIn: process.env.PASSWORD_RESET_TOKEN_EXPIRES || '15m' });
+    const token = jwt.sign(
+      { id: user._id, email: user.email }, 
+      secret, 
+      { expiresIn: process.env.PASSWORD_RESET_TOKEN_EXPIRES || '15m' }
+    );
 
-    // Generate reset link using configurable client URL
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
-
     const resetLink = `${clientUrl}/reset-password/${user._id}/${token}`;
 
     const transporter = nodemailer.createTransport({
@@ -286,6 +336,8 @@ const forgotPassword = async (req, res) => {
   }
 };
 
+// @desc    Reset password
+// @route   POST /api/auth/reset-password/:id/:token
 const resetPassword = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -318,18 +370,78 @@ const resetPassword = async (req, res) => {
   }
 };
 
-// ---> NEW: Webhook Update Controller (For Issue #430)
+// @desc    Change password (authenticated)
+// @route   POST /api/auth/change-password
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Current password and new password are required.' 
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'New password must be at least 6 characters.' 
+      });
+    }
+
+    const user = await User.findById(req.user.id).select('+password');
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found.' 
+      });
+    }
+
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'Current password is incorrect.' 
+      });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    await BlacklistedToken.invalidateAllUserTokens(
+      user._id,
+      'PASSWORD_CHANGE',
+      req.token,
+      req.ip || req.connection?.remoteAddress,
+      req.headers['user-agent']
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Password changed successfully. All sessions invalidated. Please login again.'
+    });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error. Please try again later.' 
+    });
+  }
+};
+
+// @desc    Update webhook URL
+// @route   PUT /api/auth/webhook
 const updateWebhook = async (req, res) => {
   try {
     const { webhookUrl } = req.body;
     
-    // We allow empty strings to let the user "delete/disable" their webhook
     const newWebhookValue = (webhookUrl && webhookUrl.trim() !== '') ? webhookUrl.trim() : null;
 
     const user = await User.findByIdAndUpdate(
       req.user.id,
       { webhookUrl: newWebhookValue },
-      { new: true, runValidators: true } // runValidators ensures the Regex in schema is checked
+      { new: true, runValidators: true }
     ).select('-password');
 
     if (!user) {
@@ -346,27 +458,50 @@ const updateWebhook = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook };
-const logout = async (req, res) => {
+// @desc    Get user's session status
+// @route   GET /api/auth/session-status
+const getSessionStatus = async (req, res) => {
   try {
-    let token;
-    // Extract token from header
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
-
-    if (!token) {
-      return res.status(400).json({ error: 'No token provided for logout.' });
-    }
-
-    // Add the token to the blacklist
-    await BlacklistedToken.create({ token });
-
-    res.json({ message: 'Successfully logged out. Token revoked.' });
+    const token = req.token;
+    const decoded = jwt.decode(token);
+    
+    const now = Math.floor(Date.now() / 1000);
+    const timeUntilExpiry = decoded.exp - now;
+    
+    res.json({
+      success: true,
+      expiresIn: timeUntilExpiry,
+      expiresAt: new Date(decoded.exp * 1000),
+      isExpiringSoon: timeUntilExpiry < 300
+    });
   } catch (err) {
-    console.error('Logout error:', err);
-    res.status(500).json({ error: 'Server error during logout.' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get session status' 
+    });
   }
 };
 
+
+// ============================================
+// 📌 EXPORTS - ONLY ONCE AT THE VERY END
+// ============================================
+
+module.exports = { 
+  register, 
+  login, 
+  logout, 
+  getMe, 
+  googleLogin, 
+  updateAvatar, 
+  forgotPassword, 
+  resetPassword,
+  changePassword,
+  updateWebhook,
+  getSessionStatus,
+  generateToken,
+  buildAuthResponse
+};
+
 module.exports = { register, login, logout, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook };
+
