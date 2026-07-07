@@ -1,6 +1,10 @@
 const { checkCache, setCache } = require('./middleware/cacheMiddleware');
 const { formatError, errorHandler, errorCodes, classifyMlApiError } = require('./utils/errorHelper');
 require("dotenv").config();
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
 const dns = require("dns");
 const validateEnv = require('./utils/validateEnv');
 validateEnv(); // Validate environment variables
@@ -302,11 +306,27 @@ const dispatchWebhook = async (userId, payload) => {
 };
 
 // Protected: only authenticated users can predict
-app.post("/predict", predictLimiter, preventCacheStampede, protect, checkCache, async (req, res) => {
-  try {
-    console.log("Reached /predict");
-    const { text, type, sender, confidence_threshold } = req.body;
-    console.log("Received:", text, type, sender);
+app.post(
+  "/predict",
+  predictLimiter,
+  (req, res, next) => {
+    const text = req.body.text;
+
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({
+        error: "Input text cannot be empty or whitespace only."
+      });
+    }
+    next();
+  },
+  preventCacheStampede,
+  protect,
+  checkCache,
+  async (req, res) => {
+    try {
+      console.log("Reached /predict");
+      const { text, type, sender, confidence_threshold } = req.body;
+      console.log("Received:", text, type, sender);
 
     // Check 1: fields must exist
     if (!text) {
