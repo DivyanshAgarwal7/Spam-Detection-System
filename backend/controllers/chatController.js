@@ -18,14 +18,15 @@ exports.chatHandler = async (req, res) => {
   try {
     const { message, history } = req.body;
 
-    if (!message) {
-      return res.status(400).json({ error: "Message is required." });
+    const trimmedMessage = message?.trim() || '';
+
+    if (!trimmedMessage) {
+      return res.status(400).json({ error: "Message cannot be empty or only whitespace." });
     }
 
-    if (message.length > 1000) {
+    if (trimmedMessage.length > 1000) {
       return res.status(400).json({ error: "Message exceeds maximum length of 1000 characters." });
     }
-
     const messages = [
       { role: "system", content: SYSTEM_PROMPT }
     ];
@@ -55,7 +56,7 @@ exports.chatHandler = async (req, res) => {
       }
     }
 
-    messages.push({ role: "user", content: message });
+    messages.push({ role: "user", content: trimmedMessage });
 
     const chatCompletion = await groq.chat.completions.create({
       messages: messages,
