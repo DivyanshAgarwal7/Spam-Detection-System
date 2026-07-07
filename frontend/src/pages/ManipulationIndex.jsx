@@ -64,7 +64,7 @@ const ManipulationIndex = ({ text, result, darkMode }) => {
     };
   };
 
-  const result = analyzeManipulation(text);
+  const analysisResult = analyzeManipulation(text);
 
   return(
     <div className={`mt-4 p-4 rounded-xl border ${darkMode ? 'bg-slate-800/30 border-slate-700' : 'bg-white/40 border-slate-200'}`}>
@@ -89,39 +89,39 @@ const ManipulationIndex = ({ text, result, darkMode }) => {
               cy="40"
               r="32"
               stroke={
-                result.score >= 70 ? '#ef4444' :
-                result.score >= 50 ? '#f97316' :
-                result.score >= 25 ? '#eab308' :
+                analysisResult.score >= 70 ? '#ef4444' :
+                analysisResult.score >= 50 ? '#f97316' :
+                analysisResult.score >= 25 ? '#eab308' :
                 '#22c55e'
               }
               strokeWidth="6"
               fill="none"
-              strokeDasharray={`${(result.score / 100) * 200.96} 200.96`}
+              strokeDasharray={`${(analysisResult.score / 100) * 200.96} 200.96`}
               strokeLinecap="round"
               className="transition-all duration-500"
             />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-2xl font-bold">{result.score}%</span>
+            <span className="text-2xl font-bold">{analysisResult.score}%</span>
           </div>
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-2xl">{result.riskIcon}</span>
-            <span className={`text-lg font-bold text-${result.riskColor}-500`}>
-              {result.riskLevel}
+            <span className="text-2xl">{analysisResult.riskIcon}</span>
+            <span className={`text-lg font-bold text-${analysisResult.riskColor}-500`}>
+              {analysisResult.riskLevel}
             </span>
           </div>
           <p className={`text-sm opacity-60`}>
-            {result.techniqueCount} manipulation technique{result.techniqueCount !== 1 ? 's' : ''} detected
+            {analysisResult.techniqueCount} manipulation technique{analysisResult.techniqueCount !== 1 ? 's' : ''} detected
           </p>
         </div>
       </div>
 
       {/* Techniques Breakdown */}
-      {result.techniques.length > 0 && (
+      {analysisResult.techniques.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {result.techniques.map((tech, i) => (
+          {analysisResult.techniques.map((tech, i) => (
             <span
               key={i}
               className={`px-2 py-1 rounded-full text-xs font-medium ${
