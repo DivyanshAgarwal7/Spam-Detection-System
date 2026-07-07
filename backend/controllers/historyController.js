@@ -179,9 +179,22 @@ const bulkDeleteHistory = async (req, res) => {
       });
     }
 
+    const sanitizedIds = ids.map((id) =>
+      typeof id === "string" ? sanitizeInput(id.trim()) : id
+    );
+
+    if (!sanitizedIds.every((id) => typeof id === "string" && mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({
+        success: false,
+        message: "All history ids must be valid ObjectIds.",
+      });
+    }
+
+    const safeUserId = getSafeUserId(req);
+
     const result = await History.deleteMany({
-      _id: { $in: ids },
-      user: req.user.id,
+      _id: { $in: sanitizedIds },
+      user: safeUserId,
     });
 
     res.json({
