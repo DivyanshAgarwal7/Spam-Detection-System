@@ -171,7 +171,7 @@ test("predictLimiter: allows requests up to the limit, then returns 429 with Ret
     );
     
     assert.strictEqual(first429.data.success, false);
-    assert.match(first429.data.error, /too many predict requests/i);
+    assert.match(first429.data.error, /too many predict(ion)? requests/i);
   } finally {
     server.close();
   }
