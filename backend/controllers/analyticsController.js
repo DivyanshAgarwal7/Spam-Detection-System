@@ -7,6 +7,8 @@ const DATE_FORMATS = {
   monthly: "%Y-%m",
 };
 
+const ANALYTICS_RANGES = Object.keys(DATE_FORMATS);
+
 // Labels the ML API returns for a clean verdict (text -> "ham", url -> "safe").
 // Everything else ("spam", "smishing", "malicious", "offensive", ...) counts as a threat.
 const CLEAN_LABELS = new Set(["ham", "safe"]);
@@ -57,7 +59,7 @@ const getSummary = async (req, res) => {
 // GET /analytics/trends?range=daily|weekly|monthly
 const getTrends = async (req, res) => {
   try {
-    const range = ["daily", "weekly", "monthly"].includes(req.query.range)
+    const range = ANALYTICS_RANGES.includes(req.query.range)
       ? req.query.range
       : "daily";
 

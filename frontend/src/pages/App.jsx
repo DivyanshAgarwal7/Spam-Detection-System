@@ -4,12 +4,16 @@ import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import "../App.css";
+import CensorshipMode from '../components/CensorshipMode';
 import FeatureImportance from "../components/FeatureImportance";
+import PredictionExplanation from '../components/PredictionExplanation';
 import PredictionExplanation from "../components/PredictionExplanation";
 import History from "../components/History";
 import WordCloud from "../components/WordCloud";
+import ManipulationIndex from '../components/ManipulationIndex';
 import FeedbackWidget from "../components/FeedbackWidget";
 import Login from "./Login.jsx";
+import DeSpamify from '../components/DeSpamify';
 import confetti from 'canvas-confetti';
 import Register from "./Register.jsx";
 import Skeleton from 'react-loading-skeleton';
@@ -20,6 +24,7 @@ import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
 import Chatbot from "../components/Chatbot";
 import Footer from "../components/Footer";
+import SpamPatternLibrary from '../components/SpamPatternLibrary';
 import URLPreview from '../components/URLPreview';
 import InstallAppButton from "../components/InstallAppButton";
 import RulesManager from "../components/RulesManager";
@@ -31,11 +36,14 @@ function App() {
   const [confidence, setConfidence] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [explanation, setExplanation] = useState(null);
   const [type, setType] = useState("message");
   const [errorInfo, setErrorInfo] = useState(null);
   const [wordOfDay, setWordOfDay] = useState(null);
+  const [showDeSpamify,setShowDeSpamify]= useState(false);
   const [wordLoading, setWordLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showPatternLibrary, setShowPatternLibrary] = useState(false);
   const [hasCelebrated, setHasCelebrated] = useState(() => {
     return localStorage.getItem("firstPrediction") === "true";
   });
@@ -276,6 +284,23 @@ const analyzeEmojiSentiment = (text) => {
   };
 };
 
+  const fetchWordOfTheDay = async () => {
+    try {
+      setWordLoading(true);
+      const res = await api.get('/api/word-of-the-day');
+      if (res.data.success) {
+        setWordOfDay(res.data.data);
+      } else {
+        setWordOfDay(null);
+      }
+    } catch (err) {
+      console.error("Error fetching word of the day:", err);
+      setWordOfDay(null);
+    } finally {
+      setWordLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchWordOfTheDay();
   }, []);
@@ -295,6 +320,7 @@ const analyzeEmojiSentiment = (text) => {
       }
       setResult(res.data.prediction);
       setConfidence(res.data.confidence ?? null);
+      setExplanation(res.data.explanation || null);
       setErrorInfo(null);
     } catch (error) {
       console.error('API Error:', error);
@@ -561,12 +587,27 @@ const analyzeEmojiSentiment = (text) => {
                 onClick={() => setActiveTab("rules")}
                 className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "rules" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
               >
+              <button
+                 onClick={() => setShowPatternLibrary(true)}
+                 className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
+              >
+              Patterns
+              </button>
                 Rules Manager
               </button>
               <button
                 onClick={() => setActiveTab("history")}
                 className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "history" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
               >
+              {(result === "spam" || result === "malicious" || result === "smishing") && (
+              <button
+              onClick={() => setShowDeSpamify(true)}
+              className="mt-3 px-4 py-2 rounded-lg bg-purple-500 hover:bg-purple-600 text-white font-semibold transition"
+              >
+              De-Spamify Message
+              </button>
+              )}
+
                 History
               </button>
               <button
@@ -717,6 +758,21 @@ const analyzeEmojiSentiment = (text) => {
                       </span>
                     </URLPreview>
 
+                    {explanation && result !== "Error" && (
+                    <PredictionExplanation 
+                      explanation={explanation} 
+                      result={result} 
+                      darkMode={isDark} 
+                     />
+                    )}
+
+                    {/* Manipulation Index */}
+                    <ManipulationIndex 
+                      text={text} 
+                      result={result} 
+                      darkMode={isDark} 
+                    />
+
                     {confidence !== null && result !== "Error" && (
                       <>
                         <p className="text-sm opacity-70 mb-1">Confidence Score</p>
@@ -840,7 +896,21 @@ const analyzeEmojiSentiment = (text) => {
                   </div>
                 )}
 
+                {showDeSpamify && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                  <div className="w-full max-w-2xl">
+                    <DeSpamify
+                    text={text}
+                    darkMode={isDark}
+                    onClose={() => setShowDeSpamify(false)}
+                  />
+                  </div>
+                </div>
+                )}
+
+
                 <FeatureImportance darkMode={isDark} />
+                <CensorshipMode text={text} darkMode={isDark} />
 
                 {/* SPAM WORD OF THE DAY */}
                 {wordOfDay && (
@@ -960,5 +1030,4 @@ const analyzeEmojiSentiment = (text) => {
     </div>
   );
 }
-
 export default App;

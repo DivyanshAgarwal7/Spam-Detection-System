@@ -4,25 +4,31 @@ const ruleSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: [true, "User is required."]
   },
   type: {
     type: String,
-    enum: ['blacklist', 'whitelist'],
-    required: true
+    enum: {
+      values: ['blacklist', 'whitelist'],
+      message: "Type must be either 'blacklist' or 'whitelist'."
+    },
+    required: [true, "Type is required."]
   },
   // Distinguishes sender-based rules (email/domain) from keyword/phrase rules
   // that match message content. Defaults to 'sender' so existing rules and
   // older API clients keep working unchanged.
   ruleCategory: {
     type: String,
-    enum: ['sender', 'keyword'],
+    enum: {
+      values: ['sender', 'keyword'],
+      message: "Rule category must be either 'sender' or 'keyword'."
+    },
     default: 'sender',
-    required: true
+    required: [true, "Rule category is required."]
   },
   pattern: {
     type: String,
-    required: true,
+    required: [true, "Pattern is required."],
     trim: true,
     lowercase: true
   }

@@ -1,11 +1,4 @@
-const requiredEnvVars=[
-    'PORT',
-    'NODE_ENV',
-    'MONGODB_URI',
-    'JWT_SECRET',
-    'API_URL',
-    'INTERNAL_SECRET'
-];
+const {REQUIRED_ENV_VARS} = require("../config/envConstants")
 
 // Shared secret authenticating Node→Flask calls must be long enough that it
 // can't be guessed; a default baked into source would be public and useless.
@@ -14,7 +7,7 @@ const INTERNAL_SECRET_MIN_LENGTH = 32;
 const validateEnv= () => {
     const missing = [];
 
-    for(const envVar of requiredEnvVars){
+    for(const envVar of REQUIRED_ENV_VARS){
         if(!process.env[envVar]){
             missing.push(envVar);
         }

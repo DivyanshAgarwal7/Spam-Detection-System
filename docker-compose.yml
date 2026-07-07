@@ -62,6 +62,8 @@ services:
     networks:
       - spam_network
     restart: unless-stopped
+    volumes:
+      - ./backend/imap_connections.db:/app/imap_connections.db
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\" || exit 1"]
       interval: 30s

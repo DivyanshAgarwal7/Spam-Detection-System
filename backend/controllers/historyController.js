@@ -15,19 +15,26 @@ const sanitizeInput = (v) => {
   return v;
 };
 
+const getSafeUserId = (req) => sanitizeInput(req.user.id);
+
+const getPaginationParams = (query, defaultLimit = 10, maxLimit = 100) => {
+  const page = Math.max(1, parseInt(query.page) || 1);
+  const limit = parseInt(query.limit) || defaultLimit;
+  const safeLimit = Math.min(limit, maxLimit);
+  const skip = (page - 1) * safeLimit;
+
+  return { page, safeLimit, skip };
+};
+
 // Get logged-in user's history
 const getHistory = async (req, res) => {
   try {
-    // Sanitize user ID to prevent NoSQL injection payload
-    const safeUserId = sanitizeInput(req.user.id);
+    const safeUserId = getSafeUserId(req);
 
-    //Get pagination parameters from query
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = parseInt(req.query.limit) || 10;
-    const safeLimit = Math.min(limit, 100); // Limit to 100 items per page
-    const skip = (page - 1) * safeLimit;
+    // Get pagination parameters from query
+    const { page, safeLimit, skip } = getPaginationParams(req.query, 10);
 
-    //Get total count and Paginated data using sanitized ID
+    // Get total count and paginated data using sanitized ID
     const total = await History.countDocuments({ user: safeUserId });
     const history = await History.find({ user: safeUserId })
       .sort({ createdAt: -1 })
@@ -65,11 +72,10 @@ const deleteHistoryItem = async (req, res) => {
       error: "Invalid history id",
     });
   }
-  
+
   try {
-    // Sanitize parameters
     const safeHistoryId = sanitizeInput(req.params.id);
-    const safeUserId = sanitizeInput(req.user.id);
+    const safeUserId = getSafeUserId(req);
 
     const historyItem = await History.findOneAndDelete({
       _id: safeHistoryId,
@@ -90,8 +96,7 @@ const deleteHistoryItem = async (req, res) => {
 // Clear all history for logged-in user
 const clearHistory = async (req, res) => {
   try {
-    // Sanitize user ID before bulk delete
-    const safeUserId = sanitizeInput(req.user.id);
+    const safeUserId = getSafeUserId(req);
     await History.deleteMany({ user: safeUserId });
 
     res.json({ message: "History cleared successfully" });
@@ -101,39 +106,40 @@ const clearHistory = async (req, res) => {
   }
 };
 
+// Search history
 const searchHistory = async (req, res) => {
   try {
-    const safeUserId = sanitizeInput(req.user.id);
+    const safeUserId = getSafeUserId(req);
     const { q, type, startDate, endDate } = req.query;
-    
-    let query = { user: safeUserId };
-    
+
+    const query = { user: safeUserId };
+
     if (q) {
       const escapeRegex = (string) => {
-        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       };
-      query.query = { $regex: escapeRegex(q), $options: 'i' };
+      query.query = { $regex: escapeRegex(q), $options: "i" };
     }
-    
-    if (type && type !== 'all') {
+
+    if (type && type !== "all") {
       query.type = type;
     }
-    
+
     if (startDate || endDate) {
       query.createdAt = {};
-      if (startDate) query.createdAt.$gte = new Date(startDate);
+
+      if (startDate) {
+        query.createdAt.$gte = new Date(startDate);
+      }
+
       if (endDate) {
-        // Set to end of the day to ensure we include all items on that date
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
         query.createdAt.$lte = end;
       }
     }
-    
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = parseInt(req.query.limit) || 50; // History page might fetch many
-    const safeLimit = Math.min(limit, 100);
-    const skip = (page - 1) * safeLimit;
+
+    const { page, safeLimit, skip } = getPaginationParams(req.query, 50);
 
     const total = await History.countDocuments(query);
     const history = await History.find(query)
@@ -161,9 +167,54 @@ const searchHistory = async (req, res) => {
   }
 };
 
+// Bulk delete history items
+const bulkDeleteHistory = async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request. 'ids' must be a non-empty array.",
+      });
+    }
+
+    const sanitizedIds = ids.map((id) =>
+      typeof id === "string" ? sanitizeInput(id.trim()) : id
+    );
+
+    if (!sanitizedIds.every((id) => typeof id === "string" && mongoose.Types.ObjectId.isValid(id))) {
+      return res.status(400).json({
+        success: false,
+        message: "All history ids must be valid ObjectIds.",
+      });
+    }
+
+    const safeUserId = getSafeUserId(req);
+
+    const result = await History.deleteMany({
+      _id: { $in: sanitizedIds },
+      user: safeUserId,
+    });
+
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      message: `${result.deletedCount} items deleted successfully`,
+    });
+  } catch (error) {
+    console.error("Bulk delete history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
 module.exports = {
   getHistory,
   searchHistory,
   deleteHistoryItem,
   clearHistory,
+  bulkDeleteHistory,
 };

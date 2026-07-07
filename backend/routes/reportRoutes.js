@@ -1,16 +1,8 @@
 const express = require('express');
+const { exportReport } = require('../controllers/reportController');
 const router = express.Router();
 
 // Simple route - no missing handler
-router.get('/export-pdf', (req, res) => {
-  res.json({
-    success: true,
-    message: 'PDF report endpoint working',
-    data: {
-      predictions: [],
-      charts: []
-    }
-  });
-});
+router.get('/export-pdf',exportReport);
 
 module.exports = router;

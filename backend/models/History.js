@@ -5,21 +5,24 @@ const historySchema = new mongoose.Schema(
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      required: [true, "User is required."],
     },
     query: {
       type: String,
-      required: true,
+      required: [true, "Query is required."],
       trim: true,
     },
     prediction: {
       type: String,
-      required: true,
+      required: [true, "Prediction is required."],
     },
     type: {
       type: String,
-      required: true,
-      enum: ["sms", "email", "url", "message"],
+      required: [true, "Type is required."],
+      enum: {
+        values: ["sms", "email", "url", "message"],
+        message: "Type must be one of: sms, email, url, or message.",
+      },
     },
     confidence: {
       type: Number,
@@ -27,8 +30,6 @@ const historySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-
 
 // 1. Time-Series Index: Optimizes getTrends (filtering by user & sorting by date)
 // Drastically improves performance for dashboard time-series charts.
