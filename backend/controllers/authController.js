@@ -106,42 +106,33 @@ const login = async (req, res) => {
 // @route   POST /api/auth/logout
 const logout = async (req, res) => {
   try {
-    let token;
-    
-    // Extract token from header
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    const token = req.token;
 
     if (!token) {
-      return res.status(400).json({ error: 'No token provided for logout.' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'No token provided for logout.' 
+      });
     }
 
-    // Decode token to get expiration
-    const decoded = jwt.decode(token);
-    if (!decoded || !decoded.exp) {
-      return res.status(400).json({ error: 'Invalid token format.' });
-    }
-
-    // Get user ID from token if not in request
-    const userId = req.user?._id || decoded.id;
-
-    // Add token to blacklist with full details
     await BlacklistedToken.blacklist(
       token,
-      userId,
+      req.user._id,
       'LOGOUT',
       req.ip || req.connection?.remoteAddress,
       req.headers['user-agent']
     );
 
     res.json({ 
-      message: 'Successfully logged out. Token revoked.',
-      success: true
+      success: true,
+      message: 'Successfully logged out. Token revoked.'
     });
   } catch (err) {
     console.error('Logout error:', err);
-    res.status(500).json({ error: 'Server error during logout.' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error during logout.' 
+    });
   }
 };
 
@@ -246,7 +237,6 @@ const updateAvatar = async (req, res) => {
 
     const avatarUrl = `${req.protocol}://${req.get('host')}/uploads/${filename}`;
 
-    // Clean up old avatar if it exists
     const currentUser = await User.findById(req.user.id);
     if (currentUser && currentUser.avatarUrl && currentUser.avatarUrl.includes('/uploads/')) {
       try {
@@ -293,7 +283,6 @@ const forgotPassword = async (req, res) => {
       return res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
     }
 
-    // Generate token using password hash to make it single-use
     const secret = process.env.JWT_SECRET + user.password;
     const token = jwt.sign(
       { id: user._id, email: user.email }, 
@@ -332,144 +321,7 @@ const forgotPassword = async (req, res) => {
     res.status(500).json({ error: 'Server error. Please try again later.' });
   }
 };
-// Add at the top with other imports
-const BlacklistedToken = require('../models/BlacklistedToken');
 
-// @desc    Logout user - Blacklist token
-// @route   POST /api/auth/logout
-const logout = async (req, res) => {
-  try {
-    const token = req.token;
-
-    if (!token) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'No token provided for logout.' 
-      });
-    }
-
-    // Blacklist the token
-    await BlacklistedToken.blacklist(
-      token,
-      req.user._id,
-      'LOGOUT',
-      req.ip || req.connection?.remoteAddress,
-      req.headers['user-agent']
-    );
-
-    res.json({ 
-      success: true,
-      message: 'Successfully logged out. Token revoked.'
-    });
-  } catch (err) {
-    console.error('Logout error:', err);
-    res.status(500).json({ 
-      success: false,
-      error: 'Server error during logout.' 
-    });
-  }
-};
-
-// @desc    Change password - Invalidate all tokens
-// @route   POST /api/auth/change-password
-const changePassword = async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Current password and new password are required.' 
-      });
-    }
-
-    if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'New password must be at least 6 characters.' 
-      });
-    }
-
-    const user = await User.findById(req.user.id).select('+password');
-    if (!user) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'User not found.' 
-      });
-    }
-
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'Current password is incorrect.' 
-      });
-    }
-
-    user.password = newPassword;
-    await user.save();
-
-    // Invalidate ALL tokens for this user
-    await BlacklistedToken.invalidateAllUserTokens(
-      user._id,
-      'PASSWORD_CHANGE',
-      req.token,
-      req.ip || req.connection?.remoteAddress,
-      req.headers['user-agent']
-    );
-
-    res.json({ 
-      success: true,
-      message: 'Password changed successfully. All sessions invalidated. Please login again.'
-    });
-  } catch (err) {
-    console.error('Change password error:', err);
-    res.status(500).json({ 
-      success: false,
-      error: 'Server error. Please try again later.' 
-    });
-  }
-};
-
-// @desc    Get session status
-// @route   GET /api/auth/session-status
-const getSessionStatus = async (req, res) => {
-  try {
-    const token = req.token;
-    const decoded = jwt.decode(token);
-    
-    const now = Math.floor(Date.now() / 1000);
-    const timeUntilExpiry = decoded.exp - now;
-    
-    res.json({
-      success: true,
-      expiresIn: timeUntilExpiry,
-      expiresAt: new Date(decoded.exp * 1000),
-      isExpiringSoon: timeUntilExpiry < 300 // 5 minutes
-    });
-  } catch (err) {
-    res.status(500).json({ 
-      success: false,
-      error: 'Failed to get session status' 
-    });
-  }
-};
-
-// Don't forget to export these functions
-module.exports = { 
-  register, 
-  login, 
-  logout,      // ✅ Added
-  getMe, 
-  googleLogin, 
-  updateAvatar, 
-  forgotPassword, 
-  resetPassword,
-  changePassword,   // ✅ Added
-  updateWebhook,
-  getSessionStatus, // ✅ Added
-  // ... other exports
-};
 // @desc    Reset password
 // @route   POST /api/auth/reset-password/:id/:token
 const resetPassword = async (req, res) => {
@@ -512,48 +364,55 @@ const changePassword = async (req, res) => {
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ 
+        success: false,
         error: 'Current password and new password are required.' 
       });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({ 
+        success: false,
         error: 'New password must be at least 6 characters.' 
       });
     }
 
-    // Get user with password
     const user = await User.findById(req.user.id).select('+password');
     if (!user) {
-      return res.status(404).json({ error: 'User not found.' });
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found.' 
+      });
     }
 
-    // Verify current password
     const isMatch = await user.comparePassword(currentPassword);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Current password is incorrect.' });
+      return res.status(401).json({ 
+        success: false,
+        error: 'Current password is incorrect.' 
+      });
     }
 
-    // Update password
     user.password = newPassword;
     await user.save();
 
-    // Invalidate ALL tokens for this user
     await BlacklistedToken.invalidateAllUserTokens(
       user._id,
       'PASSWORD_CHANGE',
-      req.token, // Current token from middleware
+      req.token,
       req.ip || req.connection?.remoteAddress,
       req.headers['user-agent']
     );
 
     res.json({ 
-      message: 'Password changed successfully. All sessions have been invalidated. Please login again.',
-      success: true
+      success: true,
+      message: 'Password changed successfully. All sessions invalidated. Please login again.'
     });
   } catch (err) {
     console.error('Change password error:', err);
-    res.status(500).json({ error: 'Server error. Please try again later.' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error. Please try again later.' 
+    });
   }
 };
 
@@ -599,15 +458,18 @@ const getSessionStatus = async (req, res) => {
       success: true,
       expiresIn: timeUntilExpiry,
       expiresAt: new Date(decoded.exp * 1000),
-      isExpiringSoon: timeUntilExpiry < 300 // 5 minutes
+      isExpiringSoon: timeUntilExpiry < 300
     });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to get session status' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get session status' 
+    });
   }
 };
 
 // ============================================
-// EXPORTS
+// 📌 EXPORTS - ONLY ONCE AT THE VERY END
 // ============================================
 
 module.exports = { 
