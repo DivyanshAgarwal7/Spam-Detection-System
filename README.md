@@ -306,6 +306,22 @@ app.post("/predict", async (req, res) => {
 app.listen(3000, () => console.log("Node server running"));
 ```
 
+## Rate Limiting
+
+Prediction endpoints are protected against abuse using
+`express-rate-limit`.
+
+Default configuration:
+
+```env
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX=100
+```
+
+When the limit is exceeded the API returns:
+
+`HTTP 429 Too Many Requests`
+
 ---
 
 ## 💻 React Frontend

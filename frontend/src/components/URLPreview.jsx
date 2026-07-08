@@ -130,7 +130,10 @@ const URLPreview = ({ url,children,darkMode }) => {
                 <span className={`text-sm font-semibold ${darkMode ? 'text-white' : 'text-slate-800'}`}>
                   🔗 URL Preview
                 </span>
-                <span className={`px-2 py-0.5 rounded-full text-xs text-white ${getStatusColor(previewData.status)}`}>
+                <span 
+                  className="px-2 py-0.5 rounded-full text-xs text-white"
+                  style={{ backgroundColor: getStatusColor(previewData.status) }}
+                >
                   {getStatusIcon(previewData.status)} {previewData.status}
                 </span>
               </div>

@@ -1,4 +1,5 @@
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const RedisStore = require('rate-limit-redis');
 const redis = require('redis');
 
@@ -63,6 +64,10 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true, // Don't count successful logins
+  keyGenerator: (req) => {
+    // Rate limit by email or IP
+    return req.body.email || ipKeyGenerator(req.ip || req.connection.remoteAddress);
+  },
 });
 
 /**
@@ -97,7 +102,7 @@ const resetLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     // Rate limit by email or IP
-    return req.body.email || req.ip || req.connection.remoteAddress;
+    return req.body.email || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
 });
 
@@ -137,7 +142,7 @@ const chatLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     // Rate limit by user ID if authenticated, otherwise by IP
-    return req.user?.id || req.ip || req.connection.remoteAddress;
+    return req.user?.id || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
 });
 
@@ -145,8 +150,15 @@ const chatLimiter = rateLimit({
  * Predict Rate Limiter
  * Prevents abuse of ML prediction endpoint
  */
-const PREDICT_WINDOW_MS = Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) || 60 * 1000;
-const PREDICT_MAX = Number(process.env.PREDICT_RATE_LIMIT_MAX) || 30;
+const PREDICT_WINDOW_MS =
+  Number(process.env.RATE_LIMIT_WINDOW_MS) ||
+  Number(process.env.PREDICT_RATE_LIMIT_WINDOW_MS) ||
+  15 * 60 * 1000;
+
+const PREDICT_MAX =
+  Number(process.env.RATE_LIMIT_MAX) ||
+  Number(process.env.PREDICT_RATE_LIMIT_MAX) ||
+  100;
 
 const predictLimiter = rateLimit({
   windowMs: PREDICT_WINDOW_MS,
@@ -156,13 +168,16 @@ const predictLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     // Rate limit by user ID if authenticated, otherwise by IP
-    return req.user?.id || req.ip || req.connection.remoteAddress;
+    return req.user?.id || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
   handler: (req, res, next, options) => {
     const retryAfterSeconds = Math.ceil(options.windowMs / 1000);
-    res.status(429).json({
+
+    res.setHeader("Retry-After", retryAfterSeconds);
+
+    res.status(options.statusCode).json({
       success: false,
-      error: "Too many predict requests. Please slow down.",
+      error: "Too many prediction requests. Please try again later.",
       retryAfter: retryAfterSeconds,
       limit: options.max,
       remaining: 0,
@@ -193,7 +208,7 @@ const otpLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     // Rate limit by email or phone or IP
-    return req.body.email || req.body.phone || req.ip || req.connection.remoteAddress;
+    return req.body.email || req.body.phone || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
   handler: (req, res, next, options) => {
     const retryAfterSeconds = Math.ceil(options.windowMs / 1000);
@@ -224,7 +239,7 @@ const verificationLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     // Rate limit by email, phone, or IP
-    return req.body.email || req.body.phone || req.ip || req.connection.remoteAddress;
+    return req.body.email || req.body.phone || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
   skipSuccessfulRequests: true, // Don't count successful verifications
   handler: (req, res, next, options) => {
@@ -235,6 +250,7 @@ const verificationLimiter = rateLimit({
       retryAfter: retryAfterSeconds,
       limit: options.max,
       remaining: 0
+
     });
   }
 });
@@ -254,7 +270,7 @@ const bulkPredictLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    return req.user?.id || req.ip || req.connection.remoteAddress;
+    return req.user?.id || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
 });
 
@@ -273,7 +289,7 @@ const exportLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    return req.user?.id || req.ip || req.connection.remoteAddress;
+    return req.user?.id || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
 });
 
@@ -292,7 +308,7 @@ const feedbackLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    return req.user?.id || req.ip || req.connection.remoteAddress;
+    return req.user?.id || ipKeyGenerator(req.ip || req.connection.remoteAddress);
   },
 });
 

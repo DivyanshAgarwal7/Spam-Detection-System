@@ -1,13 +1,12 @@
 const Rule = require("../models/Rule");
 const { validateKeywordPattern } = require("../utils/keywordRules");
+const { getPaginationParams } = require("../utils/pagination");
+const mongoose = require("mongoose");
 
 // Get all rules for the logged-in user
 const getRules = async (req, res) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = parseInt(req.query.limit) || 100;
-    const safeLimit = Math.min(limit, 100);
-    const skip = (page - 1) * safeLimit;
+    const { page, safeLimit, skip } = getPaginationParams(req.query, 100, 100);
 
     const total = await Rule.countDocuments({ user: req.user.id });
     const rules = await Rule.find({ user: req.user.id })
@@ -113,16 +112,20 @@ const addRule = async (req, res) => {
 
 // Delete a rule
 const deleteRule = async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ error: "Invalid rule id" });
+  }
+
   try {
     const rule = await Rule.findOneAndDelete({
       _id: req.params.id,
       user: req.user.id,
     });
-    
+
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });
     }
-    
+
     res.json({
       success: true,
       message: "Rule deleted successfully",

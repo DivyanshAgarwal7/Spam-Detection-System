@@ -17,17 +17,27 @@ const HistoryArchive = require('../models/HistoryArchive');
         const ninetyDaysAgo = new Date();
         ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
-        // 1. Find all records older than 90 days
-        const oldRecords = await History.find({ createdAt: { $lt: ninetyDaysAgo } }).session(session);
-
-        if (oldRecords.length > 0) {
+        // 1. Process records in batches to prevent OOM
+        let processedCount = 0;
+        while (true) {
+            const batch = await History.find({ createdAt: { $lt: ninetyDaysAgo } })
+                                       .limit(1000)
+                                       .session(session);
+            
+            if (batch.length === 0) break;
+            
             // 2. Bulk insert them into the Archive collection
-            await HistoryArchive.insertMany(oldRecords, { session });
+            await HistoryArchive.insertMany(batch, { session });
             
             // 3. Bulk delete them from the main History collection
-            await History.deleteMany({ createdAt: { $lt: ninetyDaysAgo } }, { session });
+            const batchIds = batch.map(doc => doc._id);
+            await History.deleteMany({ _id: { $in: batchIds } }, { session });
             
-            console.log(`✅ [Cron] Successfully archived ${oldRecords.length} records.`);
+            processedCount += batch.length;
+        }
+
+        if (processedCount > 0) {
+            console.log(`✅ [Cron] Successfully archived ${processedCount} records.`);
         } else {
             console.log('ℹ️ [Cron] No old records to archive today.');
         }

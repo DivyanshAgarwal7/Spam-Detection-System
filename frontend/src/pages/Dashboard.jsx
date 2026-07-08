@@ -15,6 +15,8 @@ import {
 } from "recharts";
 import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
+import ActivityHeatmap from '../components/ActivityHeatmap';
+
 
 const API_BASE = import.meta.env.VITE_PYTHON_URI || "http://127.0.0.1:5000";
 
@@ -75,7 +77,7 @@ export default function Dashboard() {
         api.get(`${API_BASE}/analytics/summary`),
         api.get(`${API_BASE}/analytics/trends`, { params: { range: selectedRange } }),
         api.get(`${API_BASE}/analytics/breakdown`),
-        api.get(`${API_BASE}/analytics/me`),
+        api.get("/api/v1/analytics/me"),
       ]);
       setSummary(summaryRes.data);
       const pivoted = pivotTrends(trendsRes.data);
@@ -214,6 +216,10 @@ export default function Dashboard() {
               </p>
             </div>
           ))}
+        </div>
+
+        <div className="mt-6">
+        <ActivityHeatmap userId={user?.id} darkMode={isDark} />
         </div>
 
         {/* Time-series chart */}

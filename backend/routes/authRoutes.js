@@ -1,9 +1,47 @@
+
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { validationResult } = require('express-validator');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
 const fs = require('fs');
+
+const express = require('express');
+const router = express.Router();
+
+const { body } = require('express-validator');
+const { 
+  register, 
+  login, 
+  logout,               // ✅ Import logout
+  getMe, 
+  googleLogin, 
+  updateAvatar, 
+  forgotPassword, 
+  resetPassword, 
+  updateWebhook,
+  requestOTP,
+  verifyOTP,
+  getOTPStatus,
+  changePassword,       // ✅ Import changePassword
+  getSessionStatus      // ✅ Import session status
+} = require('../controllers/authController');
+
+const { registerValidation,loginValidation,forgotPasswordValidation,resetPasswordValidation} = require("../validators/auth.validator");
+// ---> NEW: Added updateWebhook to imports
+const { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook } = require('../controllers/authController');
+
+const { protect } = require('../middleware/authMiddleware');
+const { 
+  registerLimiter, 
+  loginLimiter, 
+  resetLimiter,
+  otpLimiter,
+  verificationLimiter,
+  apiLimiter
+} = require('../middleware/rateLimiter');
+const multer = require('multer');
+
 const path = require('path');
 const sharp = require('sharp');
 const BlacklistedToken = require('../models/BlacklistedToken');
@@ -31,6 +69,7 @@ const buildAuthResponse = (user, token) => ({
     permissions: user.permissions || [],
   },
 });
+
 
 // ============================================
 // AUTH CONTROLLERS
@@ -216,6 +255,7 @@ const googleLogin = async (req, res) => {
         }
       }
 
+
       user = await User.create({
         username,
         email,
@@ -266,6 +306,40 @@ const updateAvatar = async (req, res) => {
         if (err.code !== 'ENOENT') {
           console.error('Failed to delete old avatar:', err);
         }
+
+      return true;
+    })
+];
+
+
+router.post('/login', loginValidation, loginLimiter, login);
+router.post('/register', registerValidation, registerLimiter, register);
+router.post('/google', loginLimiter, googleLogin);
+router.get('/me', protect, getMe);
+router.post('/avatar', protect, handleAvatarUpload, updateAvatar);
+
+// ---> NEW: Webhook Settings Route (Protected)
+router.put('/webhook', protect, updateWebhook);
+
+
+
+/**
+ * Change Password Validation Rules
+ */
+const changePasswordValidation = [
+  body('currentPassword')
+    .notEmpty()
+    .withMessage('Current password is required'),
+  body('newPassword')
+    .isLength({ min: 6 })
+    .withMessage('New password must be at least 6 characters')
+    .matches(/^(?=.*[A-Za-z])(?=.*\d)/)
+    .withMessage('Password must contain at least one letter and one number'),
+  body('confirmPassword')
+    .custom((value, { req }) => {
+      if (value !== req.body.newPassword) {
+        throw new Error('Passwords do not match');
+
       }
     }
 

@@ -96,8 +96,8 @@ const resetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit by email or IP
-    return req.body.email || req.ip || req.connection.remoteAddress;
+    // Rate limit strictly by IP to prevent bypass via email spoofing
+    return req.ip || req.connection.remoteAddress;
   },
 });
 
@@ -192,8 +192,8 @@ const otpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit by email or phone or IP
-    return req.body.email || req.body.phone || req.ip || req.connection.remoteAddress;
+    // Rate limit strictly by IP to prevent bypass via email/phone spoofing
+    return req.ip || req.connection.remoteAddress;
   },
   handler: (req, res, next, options) => {
     const retryAfterSeconds = Math.ceil(options.windowMs / 1000);
@@ -223,8 +223,8 @@ const verificationLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit by email, phone, or IP
-    return req.body.email || req.body.phone || req.ip || req.connection.remoteAddress;
+    // Rate limit strictly by IP to prevent brute force attempts
+    return req.ip || req.connection.remoteAddress;
   },
   skipSuccessfulRequests: true, // Don't count successful verifications
   handler: (req, res, next, options) => {
