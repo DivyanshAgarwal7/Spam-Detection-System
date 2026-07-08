@@ -60,7 +60,7 @@ function sanitizeCSVCell(cell) {
     }
 
     const trimmed = cell.trim();
-    
+
     // Dangerous patterns that could indicate formula injection
     const dangerousPatterns = [
         /^=.*/i,        // Excel formulas
@@ -132,7 +132,7 @@ function validateCSVContent(rows, headers) {
 
     // Check if required columns exist
     const requiredColumns = ['text', 'message'];
-    const hasRequiredColumn = requiredColumns.some(col => 
+    const hasRequiredColumn = requiredColumns.some(col =>
         headers.some(h => h.toLowerCase().trim() === col.toLowerCase().trim())
     );
 
@@ -176,13 +176,13 @@ async function scanForMalware(fileBuffer, filename) {
         // Check if ClamAV is available
         const clamd = require('clamdjs');
         const scanner = clamd.createScanner('localhost', 3310);
-        
+
         const result = await scanner.scanBuffer(fileBuffer);
-        
+
         if (result.isInfected) {
             throw new Error(`Malware detected: ${result.virusName}`);
         }
-        
+
         return { clean: true };
     } catch (error) {
         // If ClamAV is not available, log warning but don't block
@@ -204,7 +204,7 @@ const validateCSVUpload = async (req, res, next) => {
         upload.single('file')(req, res, async (err) => {
             if (err) {
                 if (err instanceof multer.MulterError) {
-                    if (err.code === 'FILE_TOO_LARGE') {
+                    if (err.code === "LIMIT_FILE_SIZE") {
                         return res.status(413).json({
                             success: false,
                             error: `File too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB`
@@ -238,7 +238,7 @@ const validateCSVUpload = async (req, res, next) => {
             try {
                 // 1. Validate file type (already done by multer)
                 const fileExt = path.extname(req.file.originalname).toLowerCase();
-                if (!ALLOWED_EXTENSIONS.includes(fileExt) && 
+                if (!ALLOWED_EXTENSIONS.includes(fileExt) &&
                     !ALLOWED_MIME_TYPES.includes(req.file.mimetype)) {
                     return res.status(400).json({
                         success: false,
@@ -260,7 +260,7 @@ const validateCSVUpload = async (req, res, next) => {
 
                 // 3. Parse CSV content
                 const csvContent = req.file.buffer.toString('utf8');
-                
+
                 // Basic CSV parsing (handle quoted fields)
                 const lines = csvContent.split('\n').filter(line => line.trim());
                 if (lines.length === 0) {
@@ -286,13 +286,13 @@ const validateCSVUpload = async (req, res, next) => {
                 for (let i = 1; i < lines.length; i++) {
                     const values = parseCSVLine(lines[i]);
                     const row = {};
-                    
+
                     headers.forEach((header, index) => {
                         const value = values[index] || '';
                         // Sanitize each cell
                         row[header] = sanitizeCSVCell(value);
                     });
-                    
+
                     rows.push(row);
                 }
 
@@ -342,10 +342,10 @@ function parseCSVLine(line) {
     const values = [];
     let current = '';
     let inQuotes = false;
-    
+
     for (let i = 0; i < line.length; i++) {
         const char = line[i];
-        
+
         if (char === '"') {
             if (inQuotes && line[i + 1] === '"') {
                 // Escaped quote
@@ -361,7 +361,7 @@ function parseCSVLine(line) {
             current += char;
         }
     }
-    
+
     values.push(current.trim());
     return values;
 }
