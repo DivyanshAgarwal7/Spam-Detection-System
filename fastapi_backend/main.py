@@ -37,7 +37,7 @@ else:
     url_model = None
     url_vectorizer = None
 
-URL_LABELS = {0: "malicious", 1: "safe"}
+URL_LABELS = {0: "safe", 1: "malicious"}
 SUSPICIOUS_TLDS = {
     "tk", "ml", "ga", "cf", "gq", "xyz", "top", "work", "click", "loan", "men", "review",
 }

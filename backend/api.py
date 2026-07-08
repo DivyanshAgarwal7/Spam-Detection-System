@@ -445,7 +445,12 @@ app.register_blueprint(analytics_bp)
 
 url_model = joblib.load(URL_MODEL_PATH)
 url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
+
 URL_LABELS = {0: "malicious", 1: "safe"}
+
+# url_detector.pkl predicts numeric classes with no bundled label encoder
+URL_LABELS = {0: "safe", 1: "malicious"}
+
 
 # Heuristic checks
 SUSPICIOUS_TLDS = {
