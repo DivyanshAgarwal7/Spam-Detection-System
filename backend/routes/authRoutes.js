@@ -2,26 +2,29 @@ const express = require('express');
 const router = express.Router();
 
 const { body } = require('express-validator');
-const { 
-  register, 
-  login, 
-  logout,               // ✅ Import logout
-  getMe, 
-  googleLogin, 
-  updateAvatar, 
-  forgotPassword, 
-  resetPassword, 
+const {
+  register,
+  login,
+  logout,
+  getMe,
+  googleLogin,
+  updateAvatar,
+  forgotPassword,
+  resetPassword,
   updateWebhook,
   requestOTP,
   verifyOTP,
   getOTPStatus,
-  changePassword,       // ✅ Import changePassword
-  getSessionStatus      // ✅ Import session status
+  changePassword,
+  getSessionStatus
 } = require('../controllers/authController');
 
-const { registerValidation,loginValidation,forgotPasswordValidation,resetPasswordValidation} = require("../validators/auth.validator");
-// ---> NEW: Added updateWebhook to imports
-const { register, login, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook } = require('../controllers/authController');
+const {
+  registerValidation,
+  loginValidation,
+  forgotPasswordValidation,
+  resetPasswordValidation
+} = require('../validators/auth.validator');
 
 const { protect } = require('../middleware/authMiddleware');
 const { 
@@ -132,18 +135,6 @@ const resetPasswordValidation = [
       return true;
     })
 ];
-
-
-router.post('/login', loginValidation, loginLimiter, login);
-router.post('/register', registerValidation, registerLimiter, register);
-router.post('/google', loginLimiter, googleLogin);
-router.get('/me', protect, getMe);
-router.post('/avatar', protect, handleAvatarUpload, updateAvatar);
-
-// ---> NEW: Webhook Settings Route (Protected)
-router.put('/webhook', protect, updateWebhook);
-
-
 
 /**
  * Change Password Validation Rules
