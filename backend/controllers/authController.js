@@ -28,6 +28,7 @@ const buildAuthResponse = (user, token) => ({
     avatarUrl: user.avatarUrl,
     provider: user.provider,
     role: user.role || 'user',
+    permissions: user.permissions || [],
   },
 });
 
@@ -85,9 +86,26 @@ const login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
+    // Check if account is locked
+    if (user.isLocked && user.isLocked()) {
+      return res.status(429).json({
+        success: false,
+        error: 'Account locked due to too many failed attempts. Please try again later.'
+      });
+    }
+
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      // Increment login attempts
+      if (user.incrementLoginAttempts) {
+        await user.incrementLoginAttempts();
+      }
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Reset login attempts on success
+    if (user.updateLastLogin) {
+      await user.updateLastLogin();
     }
 
     const token = generateToken(user._id);
@@ -469,6 +487,132 @@ const getSessionStatus = async (req, res) => {
 };
 
 // ============================================
+// ZERO TRUST - ROLE MANAGEMENT
+// ============================================
+
+// @desc    Assign role to user (Admin only)
+// @route   POST /api/auth/admin/assign-role
+const assignRole = async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+
+    if (!userId || !role) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId and role are required'
+      });
+    }
+
+    const validRoles = ['user', 'moderator', 'admin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid role. Must be one of: ${validRoles.join(', ')}`
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Check if requester has permission
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required to assign roles'
+      });
+    }
+
+    // Update user role (permissions auto-assigned via pre-save hook)
+    user.role = role;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Role '${role}' assigned successfully to ${user.email}`,
+      user: {
+        id: user._id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        permissions: user.permissions
+      }
+    });
+  } catch (err) {
+    console.error('Assign role error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to assign role'
+    });
+  }
+};
+
+// @desc    Get user's permissions (Admin only)
+// @route   GET /api/auth/admin/user-permissions/:userId
+const getUserPermissions = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required'
+      });
+    }
+
+    const user = await User.findById(userId).select('email username role permissions');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        permissions: user.permissions
+      }
+    });
+  } catch (err) {
+    console.error('Get user permissions error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get user permissions'
+    });
+  }
+};
+
+// @desc    Get all roles and permissions (Public)
+// @route   GET /api/auth/roles
+const getRolesAndPermissions = async (req, res) => {
+  try {
+    const roles = User.getRoles ? User.getRoles() : ['user', 'moderator', 'admin'];
+    const permissions = User.getPermissions ? User.getPermissions() : [];
+
+    res.json({
+      success: true,
+      roles: roles,
+      permissions: permissions,
+      rolePermissions: User.ROLE_PERMISSIONS || {}
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get roles and permissions'
+    });
+  }
+};
+
+// ============================================
 // 📌 EXPORTS - ONLY ONCE AT THE VERY END
 // ============================================
 
@@ -484,6 +628,9 @@ module.exports = {
   changePassword,
   updateWebhook,
   getSessionStatus,
+  assignRole,
+  getUserPermissions,
+  getRolesAndPermissions,
   generateToken,
   buildAuthResponse
 };
