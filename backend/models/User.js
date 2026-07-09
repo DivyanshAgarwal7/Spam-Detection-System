@@ -8,8 +8,8 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Username is required'],
       unique: true,
       trim: true,
-      minlength: 3,
-      maxlength: 30,
+      minlength: [3, 'Username must be at least 3 characters long'],
+      maxlength: [30, 'Username cannot exceed 30 characters'],
     },
     email: {
       type: String,
@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: false,
-      minlength: 6,
+      minlength: [6, 'Password must be at least 6 characters long'],
     },
     googleId: {
       type: String,
@@ -34,7 +34,10 @@ const userSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['local', 'google'],
+      enum: {
+        values: ['local', 'google'],
+        message: '{VALUE} is not a valid provider'
+      },
       default: 'local',
     },
     // --- NEW FIELD FOR ISSUE #430 ---
@@ -43,6 +46,7 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: null,
       match: [/^https?:\/\/.+/, 'Please enter a valid HTTP or HTTPS URL'],
+      maxlength: [2000, 'Webhook URL cannot exceed 2000 characters'],
     },
   },
   { timestamps: true }
