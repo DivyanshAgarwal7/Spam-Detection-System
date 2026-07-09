@@ -3,6 +3,9 @@ import sys
 from pathlib import Path
 import pytest
 from unittest.mock import patch
+import api as api_module
+from flask_jwt_extended import create_access_token
+from conftest import TEST_INTERNAL_SECRET
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 BACKEND_DIR = BASE_DIR / "backend"
@@ -15,9 +18,7 @@ os.environ.setdefault("URL_VECTORIZER_PATH", str(BACKEND_DIR / "url_vectorizer.p
 
 sys.path.insert(0, str(BACKEND_DIR))
 
-import api as api_module
-from flask_jwt_extended import create_access_token
-from conftest import TEST_INTERNAL_SECRET
+
 
 @pytest.fixture
 def client():
@@ -26,15 +27,16 @@ def client():
     with api_module.app.test_client() as c:
         yield c
 
-def test_gmail_emails_with_valid_secret(client):
+@patch("api.oauth_store.get_oauth_tokens")
+def test_gmail_emails_with_valid_secret(mock_get_tokens, client):
     headers = {
         "X-Internal-Secret": TEST_INTERNAL_SECRET,
         "X-User-Username": "test_user"
     }
-    api_module.TOKEN_STORE["test_user"] = {
-        "gmail": {
-            "access_token": "mock_gmail_access_token"
-        }
+    mock_get_tokens.return_value = {
+        "access_token": "mock_gmail_access_token",
+        "refresh_token": "mock_gmail_refresh_token",
+        "expires_at": "2026-07-06T12:00:00Z"
     }
     
     with patch("api.fetch_gmail_emails") as mock_fetch:

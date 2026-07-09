@@ -1,5 +1,5 @@
 const { checkCache, setCache } = require('./middleware/cacheMiddleware');
-const { formatError, errorHandler, errorCodes, classifyMlApiError } = require('./utils/errorHelper');
+const { formatError, errorHandler, errorCodes, classifyMlApiError , handleMlApiError } = require('./utils/errorHelper');
 require("dotenv").config();
 
 process.on("unhandledRejection", (reason, promise) => {

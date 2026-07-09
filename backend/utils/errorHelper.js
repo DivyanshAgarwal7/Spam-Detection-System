@@ -135,9 +135,35 @@ const errorHandler = (err, req, res, next) => {
     res.status(status).json(formatError(code, message));
 };
 
+
+const handleMlApiError = (error, req, res, context = {}) => {
+    // 1. Request ID ke saath error log karein
+    console.error(`[${req.requestId}] ML API error on ${context.endpoint || req.path}:`, error.message);
+
+    if (global.Sentry) {
+        global.Sentry.captureException(error, {
+            tags: {
+                endpoint: context.endpoint || req.originalUrl,
+                userId: context.userId || req.user?.id || 'anonymous',
+                ...context.tags
+            },
+            extra: {
+                requestId: req.requestId,
+                errorMessage: error.message,
+                ...context.extra
+            }
+        });
+    }
+
+    const { status, body } = classifyMlApiError(error);
+
+    return res.status(status).json(body);
+};
+
 module.exports = {
     formatError,
     errorHandler,
     errorCodes,
     classifyMlApiError,
+    handleMlApiError  
 };

@@ -194,6 +194,7 @@ def predict():
 
         logger.info(f"Prediction: '{text[:50]}...' -> {final_output}")
             
+        import numpy as np
         decision_score = None
         confidence_score = 95.0
         try:

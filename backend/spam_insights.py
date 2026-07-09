@@ -136,12 +136,6 @@ def load_data():
                 
     return messages
 
-import threading
-import time
-import hashlib
-import json
-from collections import OrderedDict
-
 # Configuration
 _MAX_CACHE_ENTRIES = int(os.getenv("SPAM_INSIGHTS_MAX_CACHE_ENTRIES", "5"))
 _CACHE_TTL_SECONDS = int(os.getenv("SPAM_INSIGHTS_CACHE_TTL_SECONDS", "60"))
