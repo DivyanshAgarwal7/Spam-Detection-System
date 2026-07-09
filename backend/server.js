@@ -11,6 +11,7 @@ const cors = require("cors");
 const config = require('./config');
 const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
+const predictionRoutes = require('./routes/prediction.route');
 const helmet = require('helmet');
 const axios = require("axios");
 
@@ -172,6 +173,7 @@ app.use(compression());
 app.use(express.json({limit: '1mb'}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use('/uploads', express.static('uploads'));
+app.use('/api/predictions', predictionRoutes);
 
 app.get('/health', (req, res) => {
     res.json({ 
