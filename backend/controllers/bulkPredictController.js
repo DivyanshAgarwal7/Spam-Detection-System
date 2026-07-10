@@ -66,57 +66,40 @@ const validateBulkPredictionRows = (rows, res) => {
   return normalizedRows;
 };
 
-/**
- * Handle bulk prediction request.
- * Processes the CSV rows and returns the prediction results.
- */
 exports.handleBulkPrediction = async (req, res) => {
   try {
-    if (!req.parsedCSV) {
+    if (!req.parsedFile) {
       return res.status(400).json({
         success: false,
-        error:
-          "CSV data could not be parsed. Please ensure a valid CSV file is uploaded.",
+        error: 'File could not be parsed. Please ensure a valid CSV, PDF, or DOCX file is uploaded.'
       });
     }
 
-    const { headers, rows, totalRows, filename, size } = req.parsedCSV;
+    const { rows, filename, size } = req.parsedFile;
 
-    // Final controller-level validation before sending rows to the prediction service
-    const validatedRows = validateBulkPredictionRows(rows, res);
-    if (!validatedRows) {
-      return;
-    }
+    // Process predictions
+    const results = await processBulkPrediction(rows);
 
-    const results = await processBulkPrediction(validatedRows);
-
-    return res.json({
+    res.json({
       success: true,
-      totalRows,
-      filename,
-      size,
-      results,
+      totalRows: rows.length,
+      filename: filename,
+      size: size,
+      results: results
     });
   } catch (error) {
-    console.error("Bulk prediction error:", error);
-    return res.status(500).json({
+    console.error('Bulk prediction error:', error);
+    res.status(500).json({
       success: false,
-      error: "Failed to process bulk prediction",
-      details: error.message,
+      error: 'Failed to process bulk prediction',
+      details: error.message
     });
   }
 };
 
-/**
- * Download CSV template for bulk prediction.
- */
 exports.downloadBulkPredictTemplate = (req, res) => {
   const template = 'text,label\n"Your message here",""\n"Another message",""';
-
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader(
-    "Content-Disposition",
-    'attachment; filename="bulk_predict_template.csv"'
-  );
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="bulk_predict_template.csv"');
   res.send(template);
 };
