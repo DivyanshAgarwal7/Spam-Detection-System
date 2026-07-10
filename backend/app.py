@@ -4,6 +4,7 @@ from logging.handlers import RotatingFileHandler
 from flask import request, g
 from flask import Flask,request,jsonify
 import os
+import csv
 import joblib
 import re
 from collections import Counter
@@ -62,6 +63,14 @@ def ratelimit_handler(e):
         "message": "Too many requests. Limit is 10 per minute. Please try again in 60 seconds.",
         "retry_after": 60
     }), 429 
+
+FEEDBACK_FILE = 'feedback_store.csv'
+
+def ensure_feedback_file():
+    if not os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text', 'predicted_label', 'correct_label', 'submitted_at'])
 
 # ─── LOAD MODELS ────────────────────────────────────────────────
 MODEL_PATH=os.getenv("MODEL_PATH")
