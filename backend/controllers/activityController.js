@@ -114,10 +114,23 @@ exports.getStats = async (req, res) => {
 };
 
 // ==================== USER ACTIVITY HEATMAP LOGIC ====================
+// ==================== USER ACTIVITY HEATMAP LOGIC ====================
 exports.getActivity = async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const { userId } = req.params;
     const { year, month } = req.query;
+
+    // Validate user id format before using it in aggregation
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: "Invalid user id" });
+    }
+
+    // Ensure logged-in users can only access their own activity data
+    if (userId !== req.user.id) {
+      return res.status(403).json({
+        error: "Unauthorized access to activity data",
+      });
+    }
 
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59, 999);
@@ -125,9 +138,9 @@ exports.getActivity = async (req, res) => {
     const activities = await History.aggregate([
       {
         $match: {
-          user: mongoose.Types.ObjectId(userId),
-          createdAt: { $gte: startDate, $lte: endDate }
-        }
+          user: new mongoose.Types.ObjectId(userId),
+          createdAt: { $gte: startDate, $lte: endDate },
+        },
       },
       {
         $group: {
@@ -135,14 +148,14 @@ exports.getActivity = async (req, res) => {
             day: { $dayOfMonth: "$createdAt" },
             month: { $month: "$createdAt" },
           },
-          count: { $sum: 1 }
-        }
-      }
+          count: { $sum: 1 },
+        },
+      },
     ]);
 
     const result = {};
-    activities.forEach(item => {
-      result[item._id] = item.count;
+    activities.forEach((item) => {
+      result[`${item._id.month}-${item._id.day}`] = item.count;
     });
 
     res.json(result);
