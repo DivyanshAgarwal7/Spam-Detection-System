@@ -24,6 +24,7 @@ const axios = require("axios");
 
 // Initialize background jobs
 require('./jobs/archivalCron');
+require('./jobs/webhookRetryCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
 // Add EvoMail routes
 const evoMailRoutes = require('./routes/evoMailRoutes');
