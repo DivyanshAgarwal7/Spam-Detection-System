@@ -101,7 +101,9 @@ const userSchema = new mongoose.Schema(
       select: false // Don't return password by default
 
       required: false,
+
       minlength: [6, 'Password must be at least 6 characters long'],
+
 
     },
     googleId: {
