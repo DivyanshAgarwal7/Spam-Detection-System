@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const { validateCSVUpload } = require('../middleware/fileValidation');
+const { parseUploadedFile } = require("../middleware/parseUploadedFile");
 const { bulkPredictLimiter } = require('../middleware/rateLimiter');
 const { processBulkPrediction, handleBulkPrediction, downloadBulkPredictTemplate } = require('../controllers/bulkPredictController');
+
 
 /**
  * @route   POST /api/bulk-predict
@@ -14,7 +15,7 @@ router.post(
     '/bulk-predict',
     protect,
     bulkPredictLimiter,
-    validateCSVUpload, // <-- NEW: File validation middleware
+parseUploadedFile,
     handleBulkPrediction
 );
 

@@ -16,8 +16,22 @@ const CLEAN_LABELS = new Set(["ham", "safe"]);
 const pct = (count, total) => (total ? Number(((count / total) * 100).toFixed(2)) : 0);
 
 const getUserObjectId = (req) => {
-  return new mongoose.Types.ObjectId(req.user.id)
-}
+  const userId = req.user?.id;
+
+  if (!userId) {
+    const error = new Error("Authentication required");
+    error.status = 401;
+    throw error;
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    const error = new Error("Invalid authenticated user id");
+    error.status = 400;
+    throw error;
+  }
+
+  return new mongoose.Types.ObjectId(userId);
+};
 
 // GET /analytics/summary
 const getSummary = async (req, res) => {
@@ -52,7 +66,9 @@ const getSummary = async (req, res) => {
     });
   } catch (err) {
     console.error("Analytics summary error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(err.status || 500).json({
+      error: err.message || "Server error",
+    });
   }
 };
 
