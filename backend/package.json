@@ -44,6 +44,8 @@
     "rate-limit-redis": "^5.0.0",
     "redis": "^6.1.0",
     "sharp": "^0.35.2",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1",
     "uuid": "^14.0.1"
   },
   "devDependencies": {
