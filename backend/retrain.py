@@ -28,6 +28,7 @@ Run this from the backend/ directory:
 import argparse
 import os
 import pickle
+import os
 from collections import Counter
 
 import shutil
@@ -204,6 +205,35 @@ def main():
     print(f" Saved: {VECTORIZER_PATH}")
     print(f" Saved: {LABEL_ENCODER_PATH}")
     print("\n Retraining complete! Restart the ML API to load the new model.")
+
+def trigger_model_reload():
+    """Trigger model reload in Flask API."""
+    internal_secret = os.getenv('INTERNAL_SECRET')
+    flask_api_url = os.getenv('FLASK_API_URL', 'http://localhost:5000')
+    
+    if not internal_secret:
+        print("INTERNAL_SECRET not set, skipping reload trigger")
+        return False
+    
+    try:
+        response = requests.post(
+            f"{flask_api_url}/reload-model",
+            headers={'X-Internal-Secret': internal_secret}
+        )
+        if response.status_code == 200:
+            print("Model reload triggered successfully")
+            return True
+        else:
+            print(f"Model reload failed: {response.text}")
+            return False
+    except Exception as e:
+        print(f"Failed to trigger model reload: {e}")
+        return False
+
+if __name__ == '__main__':
+    # ... existing retraining code ...
+    # After saving models:
+    trigger_model_reload()
 
 
 if __name__ == "__main__":
