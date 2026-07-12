@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import numpy as np
+from utils.spamSeverity import calculate_spam_severity
 
 load_dotenv()
 
@@ -139,7 +140,8 @@ def make_prediction_response(
     translated=False,
     translated_text=None,
     domain_analysis=None,
-    explanation=None
+    explanation=None,
+    severity=None
 ):
     """Enforces a strict standardized response schema for all predictions."""
     response = {
@@ -159,6 +161,8 @@ def make_prediction_response(
         response["domain_analysis"] = domain_analysis
     if explanation is not None:
         response["explanation"] = explanation
+    if severity is not None:
+        response["severity"] = severity
     return response
 
 
@@ -234,7 +238,8 @@ def predict():
             confidence_level=confidence_level,
             detected_language=detected_language,
             translated=translated,
-            translated_text=text if translated else None
+            translated_text=text if translated else None,
+            severity=calculate_spam_severity(original_text)
         )
         return jsonify(response_data)
 

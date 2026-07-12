@@ -15,6 +15,7 @@ from explanation_engine import ExplanationEngine
 from pathlib import Path
 from flask_cors import CORS
 import sys
+from utils.spamSeverity import calculate_spam_severity
 from filelock import FileLock
 import requests
 import nltk
@@ -613,7 +614,8 @@ def make_prediction_response(
     translated=False,
     translated_text=None,
     domain_analysis=None,
-    explanation=None
+    explanation=None,
+    severity=None
 ):
     """Enforces a strict standardized response schema for all predictions."""
     response = {
@@ -633,6 +635,8 @@ def make_prediction_response(
         response["domain_analysis"] = domain_analysis
     if explanation is not None:
         response["explanation"] = explanation
+    if severity is not None:
+        response["severity"] = severity
     return response
 
 
@@ -752,7 +756,7 @@ def predict():
             f.write(f"{datetime.now()} - [Request-ID: {getattr(g, 'request_id', 'unknown')}] Prediction: '{text_preview}' -> {final_output}\n")
         
         explanation = xai_engine.analyze(text, input_type=input_type)
-
+        severity = calculate_spam_severity(original_text)
 
         response_data = {
             "input": original_text,
@@ -781,7 +785,8 @@ def predict():
             translated=translated,
             translated_text=text if translated else None,
             domain_analysis=domain_analysis,
-            explanation=explanation
+            explanation=explanation,
+            severity=severity
         )
 
 
@@ -812,17 +817,6 @@ def extract_words(text):
 
 
 def get_wordcloud_data():
-
-    if spam_words_storage:
-
-   if spam_words_storage:
-
-    if spam_words_storage:
-
-        sorted_words = sorted(spam_words_storage.items(), key=lambda x: x[1], reverse=True)
-        return [{"word": w, "count": c} for w, c in sorted_words[:50]]
-    return None
-
     """Return stored spam word frequencies from database."""
     try:
         data = get_db_wordcloud_data()

@@ -34,6 +34,7 @@ function App() {
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
   const [confidence, setConfidence] = useState(null);
+  const [severity, setSeverity] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(false);
   const [type, setType] = useState("message");
@@ -353,6 +354,7 @@ const analyzeEmojiSentiment = (text) => {
       }
       setResult(res.data.prediction);
       setConfidence(res.data.confidence ?? null);
+      setSeverity(res.data.severity || null);
       setExplanation(res.data.explanation || null);
       setErrorInfo(null);
     } catch (error) {
@@ -432,6 +434,7 @@ const analyzeEmojiSentiment = (text) => {
   const confidencePct = confidence !== null ? Math.min(confidence * 50 + 50, 100).toFixed(1) : "0.0";
   const confidenceValue = Number(confidencePct);
   const riskLevel = confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
+  const severityTone = severity?.level === "Critical" ? "text-red-600 dark:text-red-400" : severity?.level === "High" ? "text-orange-600 dark:text-orange-400" : severity?.level === "Moderate" ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400";
 
   return (
     <div className={`min-h-screen flex flex-col items-center px-4 py-8 pb-32 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light}`}>
@@ -817,6 +820,46 @@ const analyzeEmojiSentiment = (text) => {
                         <h3 className="text-3xl font-bold mb-4">{confidencePct}%</h3>
                         <div className={`w-full rounded-full h-3 mb-5 ${isDark ? "bg-slate-700" : "bg-slate-200"}`} />
                       </>
+                    )}
+
+                    {severity && result !== "Error" && (
+                      <div className={`mt-4 rounded-2xl border p-4 text-left ${isDark ? "border-slate-700 bg-slate-800/60" : "border-slate-200 bg-slate-50"}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Severity</p>
+                            <p className={`text-xl font-bold ${severityTone}`}>{severity.level}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70">Score</p>
+                            <p className={`text-2xl font-black ${severityTone}`}>{severity.score.toFixed(1)}/10</p>
+                          </div>
+                        </div>
+                        {severity.indicators?.length > 0 && (
+                          <div className="mt-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Threat Indicators</p>
+                            <div className="flex flex-wrap gap-2">
+                              {severity.indicators.map((indicator) => (
+                                <span key={indicator} className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isDark ? "bg-slate-700 text-slate-100" : "bg-white text-slate-700 border border-slate-200"}`}>
+                                  {indicator}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {severity.breakdown && (
+                          <div className="mt-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide opacity-70 mb-2">Breakdown</p>
+                            <div className="grid gap-2 text-sm">
+                              {Object.entries(severity.breakdown).filter(([key]) => key !== "total_score").map(([key, value]) => (
+                                <div key={key} className="flex items-center justify-between rounded-lg bg-black/5 dark:bg-white/5 px-2.5 py-1.5">
+                                  <span className="capitalize">{key.replace(/_/g, " ")}</span>
+                                  <span className="font-semibold">{Number(value).toFixed(1)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {result && confidence !== null && result !== "Error" && (
