@@ -189,9 +189,11 @@ const googleLogin = async (req, res) => {
     const payload = ticket.getPayload();
     const { sub: googleId, email, name, picture } = payload;
 
+    // Pehle check karo ki user exist karta hai ya nahi
     let user = await User.findOne({ email });
 
     if (user) {
+      // Agar user already exist karta hai toh usko update karo
       if (!user.googleId) {
         user.googleId = googleId;
         user.provider = 'google';
@@ -201,34 +203,48 @@ const googleLogin = async (req, res) => {
         await user.save();
       }
     } else {
+      // ==========================================
+      // 🔥 NEW CONCURRENCY-SAFE LOGIC (Try -> Catch -> Retry)
+      // ==========================================
+      const MAX_RETRIES = 10;
+      let suffix = 0;
+
+      // Base username banao (e.g. "John Doe" -> "johndoe")
       let baseUsername = name ? name.replace(/\s+/g, '').toLowerCase() : email.split('@')[0];
-      let username = baseUsername;
+      let userCreated = false;
 
-      const regex = new RegExp(`^${baseUsername}(\\d*)$`);
-      const existingUsers = await User.find({ username: regex }).select('username').lean();
+      // Loop tab tak chalega jab tak user create na ho jaye, ya max retries khatam na ho jayein
+      while (!userCreated && suffix <= MAX_RETRIES) {
+        // Final username decide karo (suffix 0 par sirf base name, warna suffix laga do)
+        const username = suffix === 0 ? baseUsername : `${baseUsername}${suffix}`;
 
-      if (existingUsers.length > 0) {
-        const exactMatch = existingUsers.find(u => u.username === baseUsername);
-        if (exactMatch) {
-          let maxCounter = 0;
-          existingUsers.forEach(u => {
-            const match = u.username.match(regex);
-            if (match && match[1]) {
-              const num = parseInt(match[1]);
-              if (num > maxCounter) maxCounter = num;
-            }
+        try {
+          // 🔥 IMPORTANT: Direct CREATE attempt karo. Pehle Check (find) mat karo!
+          user = await User.create({
+            username,
+            email,
+            googleId,
+            avatarUrl: picture,
+            provider: 'google',
           });
-          username = `${baseUsername}${maxCounter + 1}`;
+          userCreated = true; // Success! Loop break ho jayega
+
+        } catch (err) {
+          // Agar error MongoDB ka Duplicate Key (Error Code 11000) hai
+          if (err.code === 11000 && err.keyPattern?.username) {
+            suffix++; // Suffix badhao aur dobara loop chalao (Retry)
+            console.log(`⚠️ Username collision for ${username}. Retrying with ${baseUsername}${suffix}`);
+          } else {
+            throw err; // Agar koi aur error hai (DB connection failure etc.), toh usko throw kar do
+          }
         }
       }
 
-      user = await User.create({
-        username,
-        email,
-        googleId,
-        avatarUrl: picture,
-        provider: 'google',
-      });
+      // Agar 10 baar retry ke baad bhi fail ho jaye
+      if (!userCreated) {
+        throw new Error(`Failed to generate unique username for ${baseUsername} after ${MAX_RETRIES} attempts.`);
+      }
+      // ==========================================
     }
 
     const token = generateToken(user._id);
@@ -239,7 +255,7 @@ const googleLogin = async (req, res) => {
     });
   } catch (err) {
     console.error('Google Auth Error:', err);
-    res.status(400).json({ error: 'Invalid Google token.' });
+    res.status(400).json({ error: 'Invalid Google token or failed to create user.' });
   }
 };
 
