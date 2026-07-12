@@ -15,6 +15,7 @@ from explanation_engine import ExplanationEngine
 from pathlib import Path
 from flask_cors import CORS
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 from utils.spamSeverity import calculate_spam_severity
 from filelock import FileLock
 import requests
@@ -53,8 +54,6 @@ try:
 except ImportError:
     NLTK_AVAILABLE = False
 
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 load_dotenv()
 
@@ -444,7 +443,7 @@ SPAM_WORD_METADATA = {
 def get_word_of_the_day_data():
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     word_row = None
-    with _db_connection() as conn:
+    with imap_store.get_db_connection() as conn:
         word_row = conn.execute(
             """
             SELECT word, SUM(count) as total_count
