@@ -242,12 +242,32 @@ const googleLogin = async (req, res) => {
     res.status(400).json({ error: 'Invalid Google token.' });
   }
 };
-
 const updateAvatar = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
+
+    const metadata = await sharp(req.file.buffer).metadata();
+    const MIN_DIMENSION = 100;  // Minimum 100x100 pixels
+    const MAX_DIMENSION = 4096; // Maximum 4096x4096 pixels (4K)
+
+    if (!metadata.width || !metadata.height) {
+      return res.status(400).json({ error: 'Unable to read image metadata. File might be corrupted.' });
+    }
+
+    if (metadata.width < MIN_DIMENSION || metadata.height < MIN_DIMENSION) {
+      return res.status(400).json({
+        error: `Avatar image is too small. Minimum allowed dimensions are ${MIN_DIMENSION}x${MIN_DIMENSION} pixels.`
+      });
+    }
+
+    if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
+      return res.status(400).json({
+        error: `Avatar image is too large. Maximum allowed dimensions are ${MAX_DIMENSION}x${MAX_DIMENSION} pixels.`
+      });
+    }
+    // ==========================================
 
     const filename = `${req.user.id}-${Date.now()}.webp`;
     const filepath = path.join(__dirname, '..', 'uploads', filename);
