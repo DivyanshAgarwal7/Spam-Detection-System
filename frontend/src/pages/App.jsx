@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
@@ -398,17 +399,28 @@ const analyzeEmojiSentiment = (text) => {
   } finally {
       setLoading(false);
 
-      const today = new Date().toDateString();
-      const lastDate = localStorage.getItem('lastPredictionDate');
-      const currentStreak = parseInt(localStorage.getItem('predictionStreak') || '0');
+function App() {
+  const [showButton, setShowButton] = useState(false);
 
-      if (lastDate !== today) {
-      const newStreak = currentStreak + 1;
-      localStorage.setItem('predictionStreak', newStreak.toString());
-      localStorage.setItem('lastPredictionDate', today);
-      setStreak(newStreak);
-      checkNewBadge(newStreak);
-      }
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowButton(window.scrollY > 300);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const getColor = () => {
+    if (result === "ham" || result === "safe")
+      return "text-green-600 dark:text-green-400";
+    if (result === "spam" || result === "malicious")
+      return "text-red-600 dark:text-red-400";
+    if (result === "smishing") return "text-orange-600 dark:text-orange-400";
+    if (result === "Error") {
+      return isDark ? "text-yellow-300" : "text-yellow-700";
     }
   };
 
@@ -993,117 +1005,59 @@ const analyzeEmojiSentiment = (text) => {
                 <FeatureImportance darkMode={isDark} />
                 <CensorshipMode text={text} darkMode={isDark} />
 
-                {/* SPAM WORD OF THE DAY */}
-                {wordOfDay && (
-                  <div className={`mt-6 p-4 rounded-xl border ${isDark ? 'bg-slate-800/30 border-slate-700' : 'bg-white/40 border-slate-200'}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold opacity-70">📚 Spam Word of the Day</h3>
-                      <button onClick={fetchWordOfTheDay} className="text-xs opacity-50 hover:opacity-100 transition-opacity" title="Refresh word of the day">
-                        🔄
-                      </button>
-                    </div>
-                    {wordLoading ? (
-                      <div className="h-8 w-48 bg-slate-300 rounded animate-pulse"></div>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-3">
-                          <span className={`text-2xl font-bold ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>
-                            {wordOfDay.word || 'No spam detected today'}
-                          </span>
-                          {wordOfDay.count && (
-                            <span className="text-sm opacity-60">
-                              {wordOfDay.count} {wordOfDay.count === 1 ? 'detection' : 'detections'}
-                            </span>
-                          )}
-                        </div>
-                        {wordOfDay.definition && (
-                          <p className="text-sm mt-2 opacity-75 leading-relaxed">{wordOfDay.definition}</p>
-                        )}
-                        {wordOfDay.context && (
-                          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-slate-900/50' : 'bg-slate-100/50'}`}>
-                            <span className="opacity-60">Example: </span>
-                            <span className="italic">"{wordOfDay.context}"</span>
-                          </div>
-                        )}
-                        {wordOfDay.tips && (
-                          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
-                            💡 {wordOfDay.tips}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-
-                <div className="mt-6 p-4 rounded-xl border text-left">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-semibold opacity-70">📈 Spam Detection Insights</span>
-                    <div className="flex items-center gap-2">
-                      {getEarnedBadges().map((badge) => (
-                        <span key={badge.day} className="text-lg" title={badge.name}>
-                          {badge.icon}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <WordCloud darkMode={isDark} />
-              </>
-            ) : activeTab === "bulk" ? (
-              <BulkSpamDetection />
-            ) : activeTab === "insights" ? (
-              <SpamInsightsDashboard />
-            ) : activeTab === "scanner" ? (
-              <EmailScannerDashboard />
-            ) : activeTab === "rules" ? (
-              <RulesManager />
-            ) : activeTab === "history" ? (
-              <History />
-            ) : (
-              <EmailHeaderAnalyzer />
-            )}
-
-            {showCelebration && (
-              <div className="celebration-modal" style={{
-                position: 'fixed',
-                inset: 0,
-                background: 'rgba(0,0,0,0.6)',
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 1000
-              }}>
-                <div style={{
-                  background: 'white',
-                  padding: '40px',
-                  borderRadius: '20px',
-                  textAlign: 'center',
-                  maxWidth: '400px',
-                  width: '90%'
-                }}>
-                  <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🎉</div>
-                  <h2 style={{ color: '#7c3aed' }}>First Prediction Complete!</h2>
-                  <p style={{ color: '#6b7280', marginBottom: '1.5rem' }}>
-                    You're on your way to becoming a spam detection expert!
-                  </p>
-                  <button
-                    onClick={() => setShowCelebration(false)}
-                    style={{
-                      padding: '10px 30px',
-                      background: '#7c3aed',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Continue Learning →
-                  </button>
-                </div>
-              </div>
-            )}
+                  {wordOfDay && (
+  <div className={`mt-6 p-4 rounded-xl border ${isDark ? 'bg-slate-800/30 border-slate-700' : 'bg-white/40 border-slate-200'}`}>
+    <div className="flex items-center justify-between mb-2">
+      <h3 className="text-sm font-semibold opacity-70">📚 Spam Word of the Day</h3>
+      <button onClick={fetchWordOfTheDay} className="text-xs opacity-50 hover:opacity-100 transition-opacity" title="Refresh word of the day">
+        
+      </button>
+    </div>
+    {wordLoading ? (
+      <div className="h-8 w-48 bg-slate-300 rounded animate-pulse"></div>
+    ) : (
+      <>
+        <div className="flex items-center gap-3">
+          <span className={`text-2xl font-bold ${isDark ? 'text-yellow-400' : 'text-yellow-600'}`}>
+            {wordOfDay.word || 'No spam detected today'}
+          </span>
+          {wordOfDay.count && (
+            <span className="text-sm opacity-60">
+              {wordOfDay.count} {wordOfDay.count === 1 ? 'detection' : 'detections'}
+            </span>
+          )}
+        </div>
+        {wordOfDay.definition && (
+          <p className="text-sm mt-2 opacity-75 leading-relaxed">{wordOfDay.definition}</p>
+        )}
+        {wordOfDay.context && (
+          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-slate-900/50' : 'bg-slate-100/50'}`}>
+            <span className="opacity-60">Example: </span>
+            <span className="italic">"{wordOfDay.context}"</span>
           </div>
+        )}
+        {wordOfDay.tips && (
+          <div className={`mt-2 p-2 rounded text-xs ${isDark ? 'bg-blue-900/20' : 'bg-blue-50'}`}>
+             {wordOfDay.tips}
+          </div>
+        )}
+      </>
+    )}
+  </div>
+)}
+
+              <FeatureImportance darkMode={isDark} />
+            </>
+          ) : activeTab === "bulk" ? (
+            <BulkSpamDetection />
+          ) : activeTab === "insights" ? (
+            <SpamInsightsDashboard />
+          ) : activeTab === "scanner" ? (
+            <EmailScannerDashboard />
+          ) : (
+            <EmailHeaderAnalyzer />
+          )}
+          <WordCloud darkMode={isDark} />
         </div>
       </div>
       <Footer darkMode={isDark} />
