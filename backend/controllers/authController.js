@@ -8,6 +8,7 @@ const path = require('path');
 const sharp = require('sharp');
 const BlacklistedToken = require('../models/BlacklistedToken');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const emailTransporter = require('../utils/emailTransporter');
 
 // ============================================
 // TOKEN GENERATION
@@ -364,27 +365,19 @@ const forgotPassword = async (req, res) => {
 
     const secret = process.env.JWT_SECRET + user.password;
     const token = jwt.sign(
-      { id: user._id, email: user.email }, 
-      secret, 
+      { id: user._id, email: user.email },
+      secret,
       { expiresIn: process.env.PASSWORD_RESET_TOKEN_EXPIRES || '15m' }
     );
 
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
     const resetLink = `${clientUrl}/reset-password/${user._id}/${token}`;
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
-      port: process.env.EMAIL_PORT || 587,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
     const emailFrom = process.env.EMAIL_FROM || '"Spam Detection System" <noreply@spamdetection.local>';
 
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      await transporter.sendMail({
+      // 🔥 UPDATED: Using the centralized transporter instead of creating a new one
+      await emailTransporter.sendMail({
         from: emailFrom,
         to: user.email,
         subject: 'Password Reset Request',
@@ -705,5 +698,3 @@ module.exports = {
   generateToken,
   buildAuthResponse
 };
-
-
