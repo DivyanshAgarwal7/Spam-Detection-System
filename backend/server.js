@@ -67,9 +67,8 @@ const Rule = require("./models/Rule");
 const User = require("./models/User");
 const { matchKeywordRule } = require("./utils/keywordRules");
 
-const multer = require("multer");
 const displayBanner = require('./utils/banner');
-const upload = multer();
+  const { upload } = require('./config/multerConfig');
 const FormData = require("form-data");
 
 const app = express();
