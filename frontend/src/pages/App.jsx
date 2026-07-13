@@ -20,7 +20,6 @@ import Skeleton from 'react-loading-skeleton';
 import 'react-loading-skeleton/dist/skeleton.css';
 import EmailHeaderAnalyzer from "../components/EmailHeaderAnalyzer";
 import BulkSpamDetection from "../components/BulkSpamDetection";
-import { ResultBadge } from './components/ResultBadge';
 import SpamInsightsDashboard from "../components/SpamInsightsDashboard";
 import EmailScannerDashboard from "../components/EmailScannerDashboard";
 import Chatbot from "../components/Chatbot";
@@ -396,10 +395,11 @@ const analyzeEmojiSentiment = (text) => {
     message: errorMessage,
     retryable: retryable
   });
-  } finally {
+    } finally {
       setLoading(false);
+    }
+  };
 
-function App() {
   const [showButton, setShowButton] = useState(false);
 
   useEffect(() => {
@@ -635,18 +635,20 @@ function App() {
                 onClick={() => setActiveTab("rules")}
                 className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "rules" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
               >
+                Rules Manager
+              </button>
               <button
                  onClick={() => setShowPatternLibrary(true)}
                  className="px-4 py-2.5 rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2 shadow-md"
               >
               Patterns
               </button>
-                Rules Manager
-              </button>
               <button
                 onClick={() => setActiveTab("history")}
                 className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "history" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
               >
+                History
+              </button>
               {(result === "spam" || result === "malicious" || result === "smishing") && (
               <button
               onClick={() => setShowDeSpamify(true)}
@@ -655,9 +657,6 @@ function App() {
               De-Spamify Message
               </button>
               )}
-
-                History
-              </button>
               <button
                 onClick={() => navigate("/dashboard")}
                 className="pb-1 px-4 transition-all border-b-2 border-transparent opacity-50 hover:opacity-75"
@@ -903,27 +902,27 @@ function App() {
                     ))}
 
                     {/* Emoji Sentiment Analysis */}
-                    {result && result !== "Error" && text && analyzeEmojis(text).count > 0 && (
+                    {result && result !== "Error" && text && analyzeEmojiSentiment(text).count > 0 && (
                      <div className="mt-4 pt-3 border-t border-slate-700/20">
                       <p className="text-xs font-semibold opacity-70 mb-2 flex items-center gap-1">
                          <span>😊</span> Emoji Sentiment
                       </p>
                      <div className="flex flex-wrap items-center gap-3">
                         <span className="text-lg">
-                        {analyzeEmojis(text).emojis.join(' ')}
+                        {analyzeEmojiSentiment(text).emojis.join(' ')}
                          </span>
                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                         analyzeEmojis(text).sentiment === 'positive' 
+                         analyzeEmojiSentiment(text).sentiment === 'positive' 
                          ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
-                         : analyzeEmojis(text).sentiment === 'negative'
+                         : analyzeEmojiSentiment(text).sentiment === 'negative'
                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800/30 dark:text-gray-400'
                         }`}>
-                        {analyzeEmojis(text).sentiment === 'positive' && '😊 Positive'}
-                        {analyzeEmojis(text).sentiment === 'negative' && '😢 Negative'}
-                        {analyzeEmojis(text).sentiment === 'neutral' && '😐 Neutral'}
+                        {analyzeEmojiSentiment(text).sentiment === 'positive' && '😊 Positive'}
+                        {analyzeEmojiSentiment(text).sentiment === 'negative' && '😢 Negative'}
+                        {analyzeEmojiSentiment(text).sentiment === 'neutral' && '😐 Neutral'}
                         </span>
-                        {analyzeEmojis(text).spamDetected && (
+                        {analyzeEmojiSentiment(text).spamDetected && (
                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500 text-white">
                           ⚠️ Spam Emojis
                          </span>
@@ -1057,6 +1056,7 @@ function App() {
           ) : (
             <EmailHeaderAnalyzer />
           )}
+          </div>
           <WordCloud darkMode={isDark} />
         </div>
       </div>

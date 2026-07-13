@@ -196,7 +196,6 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
  
      // Check ML Cache globally before calling Flask
      const cacheKey = `spam_cache:${require('crypto').createHash('sha256').update(text).digest('hex')}`;
-     const { redisClient } = require("./middleware/cacheMiddleware");
      if (redisClient && redisClient.status === 'ready') {
        try {
          const cachedResult = await redisClient.get(cacheKey);
