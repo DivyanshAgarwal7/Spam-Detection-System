@@ -3,12 +3,12 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from imap_store import DB_PATH, _connection
+from imap_store import DB_PATH, get_db_connection
 from crypto_utils import encrypt_secret, decrypt_secret
 
 
 def init_db():
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS oauth_tokens (
@@ -46,7 +46,7 @@ def save_oauth_tokens(username, provider, tokens):
     expires_at = (now + timedelta(seconds=int(expires_in))).isoformat()
     updated_at = now.isoformat()
 
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute(
             """
             INSERT INTO oauth_tokens (username, provider, encrypted_access_token, encrypted_refresh_token, expires_at, updated_at)
@@ -63,7 +63,7 @@ def save_oauth_tokens(username, provider, tokens):
 
 
 def get_oauth_tokens(username, provider):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         row = conn.execute(
             "SELECT * FROM oauth_tokens WHERE username = ? AND provider = ?",
             (username, provider),
@@ -91,7 +91,7 @@ def get_oauth_tokens(username, provider):
 
 
 def delete_oauth_tokens(username, provider=None):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         if provider:
             conn.execute(
                 "DELETE FROM oauth_tokens WHERE username = ? AND provider = ?",
@@ -106,7 +106,7 @@ def delete_oauth_tokens(username, provider=None):
 
 
 def get_all_oauth_tokens():
-    with _connection() as conn:
+    with get_db_connection() as conn:
         rows = conn.execute("SELECT * FROM oauth_tokens").fetchall()
         tokens_list = []
         for row in rows:
@@ -133,7 +133,7 @@ def get_all_oauth_tokens():
 def get_expiring_oauth_tokens(threshold_minutes=10):
     now = datetime.now(timezone.utc)
     threshold = (now + timedelta(minutes=threshold_minutes)).isoformat()
-    with _connection() as conn:
+    with get_db_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM oauth_tokens WHERE expires_at <= ?",
             (threshold,),

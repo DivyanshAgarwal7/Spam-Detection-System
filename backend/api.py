@@ -356,13 +356,10 @@ spam_words_storage = {}
 import sqlite3
 from datetime import datetime, timezone
 
-def _db_connection():
-    conn = sqlite3.connect(imap_store.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+
 
 def init_spam_words_db():
-    with _db_connection() as conn:
+    with imap_store.get_db_connection() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS spam_word_frequencies (
@@ -377,7 +374,7 @@ def init_spam_words_db():
 
 def increment_spam_word_frequency(word):
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    with _db_connection() as conn:
+    with imap_store.get_db_connection() as conn:
         conn.execute(
             """
             INSERT INTO spam_word_frequencies (word, day, count)
@@ -389,7 +386,7 @@ def increment_spam_word_frequency(word):
         conn.commit()
 
 def get_db_wordcloud_data():
-    with _db_connection() as conn:
+    with imap_store.get_db_connection() as conn:
         rows = conn.execute(
             """
             SELECT word, SUM(count) as total_count

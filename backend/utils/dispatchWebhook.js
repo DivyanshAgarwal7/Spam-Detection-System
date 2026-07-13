@@ -1,7 +1,7 @@
 // src/utils/dispatchWebhook.js
 const net = require('net');
-const axios = require('axios');
 const User = require('../models/User');
+const WebhookDelivery = require('../models/WebhookDelivery');
 
 /**
  * Checks if a webhook URL is safe from SSRF attacks.
@@ -34,7 +34,7 @@ const isSafeWebhookUrl = (webhookUrl) => {
 };
 
 /**
- * Dispatches a high-risk threat alert via webhook asynchronously.
+ * Enqueues a high-risk threat alert for reliable webhook delivery.
  * @param {string} userId - The ID of the user to send the webhook for.
  * @param {Object} payload - The threat details payload.
  */
@@ -43,24 +43,25 @@ const dispatchWebhook = async (userId, payload) => {
     const user = await User.findById(userId);
     if (user && user.webhookUrl) {
       if (!isSafeWebhookUrl(user.webhookUrl)) {
-        console.warn(`[Webhook Blocked] SSRF protection prevented request to: ${user.webhookUrl}`);
+        console.warn(`[Webhook Blocked] SSRF protection prevented queueing request to: ${user.webhookUrl}`);
         return;
       }
 
-      console.log(`[Webhook] Dispatching threat alert to: ${user.webhookUrl}`);
+      console.log(`[Webhook] Enqueueing threat alert to: ${user.webhookUrl}`);
 
-      // Fire and forget (Asynchronous execution via Axios) with 10s timeout
-      axios.post(user.webhookUrl, {
-        event: 'high_risk_threat_detected',
-        timestamp: new Date().toISOString(),
-        threat_details: payload
-      }, { timeout: 10000 }).catch(err => {
-        // Resilience: Catch external server errors so our app doesn't crash
-        console.error(`[Webhook Failed] Could not deliver to ${user.webhookUrl}:`, err.message);
+      // Insert into retry queue (processed by webhookRetryCron)
+      await WebhookDelivery.create({
+        userId: user._id,
+        url: user.webhookUrl,
+        payload: {
+          event: 'high_risk_threat_detected',
+          timestamp: new Date().toISOString(),
+          threat_details: payload
+        }
       });
     }
   } catch (err) {
-    console.error('[Webhook Error] Error fetching user for webhook:', err.message);
+    console.error('[Webhook Error] Error enqueuing webhook:', err.message);
   }
 };
 

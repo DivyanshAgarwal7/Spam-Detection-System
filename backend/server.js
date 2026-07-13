@@ -21,9 +21,11 @@ const compression = require('compression');
 const { v4: uuidv4 } = require('uuid');
 const helmet = require('helmet');
 const axios = require("axios");
+const { corsOptions } = require('./config/corsConfig');
 
 // Initialize background jobs
 require('./jobs/archivalCron');
+require('./jobs/webhookRetryCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
 // Add EvoMail routes
 const evoMailRoutes = require('./routes/evoMailRoutes');
@@ -66,9 +68,8 @@ const Rule = require("./models/Rule");
 const User = require("./models/User");
 const { matchKeywordRule } = require("./utils/keywordRules");
 
-const multer = require("multer");
 const displayBanner = require('./utils/banner');
-const upload = multer();
+  const { upload } = require('./config/multerConfig');
 const FormData = require("form-data");
 
 const app = express();
@@ -194,10 +195,7 @@ if (process.env.NODE_ENV === 'development') {
 // Start connection with retry
 connectWithRetry();
 
-const corsOptions = {
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
-  credentials: true,
-};
+
 app.use(cors(corsOptions));
 app.use(helmet());
 app.use(compression());
