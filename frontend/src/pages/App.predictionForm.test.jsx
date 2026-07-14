@@ -2,7 +2,7 @@
 // detector tab in App.jsx) end to end against a mocked backend, since this
 // is the core user-facing flow the automated test suite should protect.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -45,12 +45,16 @@ describe('Prediction form (App detector tab)', () => {
       if (url === '/api/wordcloud') {
         return Promise.resolve({ data: { success: true, data: [] } });
       }
-      return Promise.resolve({ data: { success: false } });
+      return Promise.resolve({ data: { success: true, data: [] } });
     });
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ top_features: [] }) })),
     );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('submit button is disabled until text is entered', () => {
