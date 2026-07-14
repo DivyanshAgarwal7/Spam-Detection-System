@@ -130,7 +130,9 @@ const getTrends = async (req, res) => {
     res.json(formattedTrends);
   } catch (err) {
     console.error("Analytics trends error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(err.status || 500).json({
+      error: err.message || "Server error",
+    });
   }
 };
 
@@ -167,7 +169,9 @@ const getBreakdown = async (req, res) => {
     res.json(formattedBreakdown);
   } catch (err) {
     console.error("Analytics breakdown error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(err.status || 500).json({
+      error: err.message || "Server error",
+    });
   }
 };
 
@@ -245,7 +249,9 @@ const getPersonalSummary = async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("Personal analytics error:", err);
-    res.status(500).json({ error: "Server error" });
+    res.status(err.status || 500).json({
+      error: err.message || "Server error",
+    });
   }
 };
 
