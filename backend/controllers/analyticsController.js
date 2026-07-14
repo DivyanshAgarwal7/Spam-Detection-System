@@ -47,15 +47,13 @@ const getSummary = async (req, res) => {
   try {
     const userId = getUserObjectId(req);
     const counts = await History.aggregate([
+      { $match: { user: userId } },
       {
-        $match: {
-          user: userId,
-          prediction: { $exists: true, $ne: null },
-          type: { $exists: true, $ne: null },
-          createdAt: { $exists: true, $ne: null }
+        $group: {
+          _id: { $toLower: { $trim: { input: "$prediction" } } },
+          count: { $sum: 1 }
         }
-      },
-      { $group: { _id: "$prediction", count: { $sum: 1 } } },
+      }
     ]);
 
     const totalScanned = counts.reduce((sum, { count }) => sum + count, 0);
@@ -72,7 +70,6 @@ const getSummary = async (req, res) => {
       else unknownCount += count;
     });
 
-    // Also include unknown counts in the response
     const unknownLabelCount = unknownCount;
     const unknownPercentage = pct(unknownCount, totalScanned);
 
@@ -116,15 +113,14 @@ const getTrends = async (req, res) => {
         $group: {
           _id: {
             date: { $dateToString: { format: DATE_FORMATS[range], date: "$createdAt" } },
-            label: "$prediction",
+            label: { $toLower: { $trim: { input: "$prediction" } } }
           },
-          count: { $sum: 1 },
-        },
+          count: { $sum: 1 }
+        }
       },
-      { $sort: { "_id.date": 1 } },
+      { $sort: { "_id.date": 1 } }
     ]);
 
-    // Map unknown labels to "unknown" for consistency
     const formattedTrends = trends.map(({ _id, count }) => ({
       date: _id.date,
       label: classifyLabel(_id.label) === "unknown" ? "unknown" : _id.label,
@@ -153,13 +149,15 @@ const getBreakdown = async (req, res) => {
       },
       {
         $group: {
-          _id: { type: "$type", label: "$prediction" },
-          count: { $sum: 1 },
-        },
-      },
+          _id: {
+            type: "$type",
+            label: { $toLower: { $trim: { input: "$prediction" } } }
+          },
+          count: { $sum: 1 }
+        }
+      }
     ]);
 
-    // Map unknown labels to "unknown"
     const formattedBreakdown = breakdown.map(({ _id, count }) => ({
       type: _id.type,
       label: classifyLabel(_id.label) === "unknown" ? "unknown" : _id.label,
@@ -190,27 +188,47 @@ const getPersonalSummary = async (req, res) => {
         $group: {
           _id: null,
           total_predictions: { $sum: 1 },
-          spam_count: { $sum: { $cond: [{ $eq: ["$prediction", "spam"] }, 1, 0] } },
-          ham_count: { $sum: { $cond: [{ $in: ["$prediction", ["ham", "safe"]] }, 1, 0] } },
-          smishing_count: { $sum: { $cond: [{ $eq: ["$prediction", "smishing"] }, 1, 0] } },
-          malicious_count: { $sum: { $cond: [{ $eq: ["$prediction", "malicious"] }, 1, 0] } },
-          offensive_count: { $sum: { $cond: [{ $eq: ["$prediction", "offensive"] }, 1, 0] } },
+          spam_count: {
+            $sum: {
+              $cond: [{ $eq: [{ $toLower: { $trim: { input: "$prediction" } } }, "spam"] }, 1, 0]
+            }
+          },
+          ham_count: {
+            $sum: {
+              $cond: [{ $in: [{ $toLower: { $trim: { input: "$prediction" } } }, ["ham", "safe"]] }, 1, 0]
+            }
+          },
+          smishing_count: {
+            $sum: {
+              $cond: [{ $eq: [{ $toLower: { $trim: { input: "$prediction" } } }, "smishing"] }, 1, 0]
+            }
+          },
+          malicious_count: {
+            $sum: {
+              $cond: [{ $eq: [{ $toLower: { $trim: { input: "$prediction" } } }, "malicious"] }, 1, 0]
+            }
+          },
+          offensive_count: {
+            $sum: {
+              $cond: [{ $eq: [{ $toLower: { $trim: { input: "$prediction" } } }, "offensive"] }, 1, 0]
+            }
+          },
           unknown_count: {
             $sum: {
               $cond: [{
                 $and: [
-                  { $ne: ["$prediction", "spam"] },
-                  { $ne: ["$prediction", "smishing"] },
-                  { $ne: ["$prediction", "malicious"] },
-                  { $ne: ["$prediction", "offensive"] },
-                  { $not: { $in: ["$prediction", ["ham", "safe"]] } }
+                  { $ne: [{ $toLower: { $trim: { input: "$prediction" } } }, "spam"] },
+                  { $ne: [{ $toLower: { $trim: { input: "$prediction" } } }, "smishing"] },
+                  { $ne: [{ $toLower: { $trim: { input: "$prediction" } } }, "malicious"] },
+                  { $ne: [{ $toLower: { $trim: { input: "$prediction" } } }, "offensive"] },
+                  { $not: { $in: [{ $toLower: { $trim: { input: "$prediction" } } }, ["ham", "safe"]] } }
                 ]
               }, 1, 0]
             }
           },
           most_recent: { $max: "$createdAt" },
-        },
-      },
+        }
+      }
     ]);
 
     const result = stats[0] || {
