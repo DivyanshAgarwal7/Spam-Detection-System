@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useEffect } from 'react';
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -352,6 +352,7 @@ const analyzeEmojiSentiment = (text) => {
   const confidenceValue = Number(confidencePct);
   const riskLevel = confidenceValue >= 80 ? "High" : confidenceValue >= 50 ? "Medium" : "Low";
   const severityTone = severity?.level === "Critical" ? "text-red-600 dark:text-red-400" : severity?.level === "High" ? "text-orange-600 dark:text-orange-400" : severity?.level === "Moderate" ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400";
+  const emojiAnalysis = useMemo(() => analyzeEmojiSentiment(text), [text]);
 
   return (
     <div className={`min-h-screen flex flex-col items-center px-4 py-8 pb-32 transition-all duration-500 ${isDark ? activeTheme.dark : activeTheme.light}`}>
@@ -807,27 +808,27 @@ const analyzeEmojiSentiment = (text) => {
                     ))}
 
                     {/* Emoji Sentiment Analysis */}
-                    {result && result !== "Error" && text && analyzeEmojiSentiment(text).count > 0 && (
+                    {result && result !== "Error" && text && emojiAnalysis.count > 0 && (
                      <div className="mt-4 pt-3 border-t border-slate-700/20">
                       <p className="text-xs font-semibold opacity-70 mb-2 flex items-center gap-1">
                          <span>😊</span> Emoji Sentiment
                       </p>
                      <div className="flex flex-wrap items-center gap-3">
                         <span className="text-lg">
-                        {analyzeEmojiSentiment(text).emojis.join(' ')}
+                        {emojiAnalysis.emojis.join(' ')}
                          </span>
                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
-                         analyzeEmojiSentiment(text).sentiment === 'positive' 
-                         ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
-                         : analyzeEmojiSentiment(text).sentiment === 'negative'
+                         emojiAnalysis.sentiment === 'positive'
+                         ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                         : emojiAnalysis.sentiment === 'negative'
                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800/30 dark:text-gray-400'
                         }`}>
-                        {analyzeEmojiSentiment(text).sentiment === 'positive' && '😊 Positive'}
-                        {analyzeEmojiSentiment(text).sentiment === 'negative' && '😢 Negative'}
-                        {analyzeEmojiSentiment(text).sentiment === 'neutral' && '😐 Neutral'}
+                        {emojiAnalysis.sentiment === 'positive' && '😊 Positive'}
+                        {emojiAnalysis.sentiment === 'negative' && '😢 Negative'}
+                        {emojiAnalysis.sentiment === 'neutral' && '😐 Neutral'}
                         </span>
-                        {analyzeEmojiSentiment(text).spamDetected && (
+                        {emojiAnalysis.spamDetected && (
                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500 text-white">
                           ⚠️ Spam Emojis
                          </span>
