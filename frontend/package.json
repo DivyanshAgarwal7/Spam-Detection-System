@@ -14,6 +14,7 @@
     "@tailwindcss/vite": "^4.2.2",
     "axios": "^1.13.6",
     "canvas-confetti": "^1.9.4",
+    "dompurify": "^3.4.12",
     "lucide-react": "^1.21.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
