@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import DOMPurify from 'dompurify';
 import { useTheme } from '../context/ThemeContext';
 import './Chatbot.css';
 
@@ -113,7 +114,7 @@ const Chatbot = () => {
               const formatMessage = (text) => {
                 if (!text) return "";
                 const formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-                return <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: formatted }} />;
+                return <div style={{ whiteSpace: 'pre-wrap' }} dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(formatted) }} />;
               };
 
               return (
