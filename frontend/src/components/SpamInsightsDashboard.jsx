@@ -3,6 +3,7 @@ import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import { SpamTrends } from './SpamTrends';
 import { RecentActivity } from './RecentActivity';
+import { AccuracyMeter } from './AccuracyMeter';
 
 
 export default function SpamInsightsDashboard() {
@@ -192,6 +193,10 @@ export default function SpamInsightsDashboard() {
 
           <div className="dashboard-section">
              <RecentActivity />
+          </div>
+
+          <div className="dashboard-section">
+             <AccuracyMeter />
           </div>
 
 
