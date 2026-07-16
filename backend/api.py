@@ -18,6 +18,7 @@ from explanation_engine import ExplanationEngine
 from pathlib import Path
 from flask_cors import CORS
 import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
@@ -60,6 +61,8 @@ except ImportError:
     NLTK_AVAILABLE = False
 
 
+
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -71,6 +74,7 @@ CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
 PREDICT_RATE_LIMIT = os.getenv("PREDICT_RATE_LIMIT", "50 per minute")
 
 from extensions import limiter
+app.config["RATELIMIT_DEFAULT"] = PREDICT_RATE_LIMIT
 limiter.init_app(app)
 
 # Flask-Limiter uses a default 429 HTML response; standardize to JSON.
@@ -178,7 +182,7 @@ def ip_allowlist(f):
         allowed_ips = os.getenv("SERVICE_IP_ALLOWLIST", "127.0.0.1,::1")
         allowed_list = [ip.strip() for ip in allowed_ips.split(",")]
         
-        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
         # Get first IP if multiple
         if "," in client_ip:
             client_ip = client_ip.split(",")[0].strip()
@@ -194,42 +198,6 @@ def ip_allowlist(f):
         return f(*args, **kwargs)
     return decorated_function
 
-
-# ============================================
-# ZERO TRUST - REQUEST VALIDATION
-# ============================================
-
-def validate_request(f):
-    """Validate every request - Assume Breach mindset"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Validate query parameters
-        for key, value in request.args.items():
-            if isinstance(value, str):
-                # Check for suspicious patterns
-                if any(p in value.lower() for p in ['<script', 'javascript:', 'onerror', 'onload']):
-                    app.logger.warning(f"⚠️  Suspicious query param: {key}={value[:50]}")
-                    return jsonify({
-                        "success": False,
-                        "error": "Invalid request parameters"
-                    }), 400
-        
-        # Validate request body
-        if request.is_json:
-            data = request.get_json(silent=True) or {}
-            # Check for suspicious patterns in JSON data
-            import json
-            data_str = json.dumps(data).lower()
-            if any(p in data_str for p in ['<script', 'javascript:', 'onerror']):
-                app.logger.warning(f"⚠️  Suspicious request body from {request.remote_addr}")
-                return jsonify({
-                    "success": False,
-                    "error": "Invalid request body"
-                }), 400
-        
-
-        return f(*args, **kwargs)
-    return decorated_function
 
 
 # ============================================
@@ -348,13 +316,6 @@ from xai_service import XAIService
 xai_service = XAIService(model=model, vectorizer=vectorizer, label_encoder=label_encoder)
 
 
-# In-memory storage for spam words
-spam_words_storage = {}
-
-
-# In-memory storage for spam words
-spam_words_storage = {}
-
 
 # SQLite Persistent Storage for spam words
 import sqlite3
@@ -471,7 +432,7 @@ def get_word_of_the_day_data():
                 LIMIT 1
                 """
             ).fetchone()
-            
+    
     if word_row:
         word = word_row["word"]
         count = word_row["total_count"]
@@ -494,9 +455,9 @@ def get_word_of_the_day_data():
     }
 
 
-app.model = model
-app.vectorizer = vectorizer
-app.label_encoder = label_encoder
+app.model = model  # type: ignore[attr-defined]
+app.vectorizer = vectorizer  # type: ignore[attr-defined]
+app.label_encoder = label_encoder  # type: ignore[attr-defined]
 
 from bulk_predict import bulk_predict_bp
 app.register_blueprint(bulk_predict_bp)
@@ -780,7 +741,7 @@ def predict():
         else:
             confidence_level = "low"
 
-        if final_output == "spam":
+        if final_output != "ham":
             words = extract_words(text)
             for word in words:
                 try:
@@ -1263,9 +1224,9 @@ def scan_emails_route():
 
 imap_store.init_db()
 oauth_store.init_db()
+init_spam_words_db()
 scheduler = BackgroundScheduler()
 scheduler.start()
-
 
 def _refresh_oauth_tokens():
     """Runs inside the scheduler thread: refreshes OAuth tokens close to expiration."""
