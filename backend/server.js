@@ -17,7 +17,8 @@ const axios = require("axios");
 // Initialize background jobs
 require('./jobs/archivalCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
-
+const adversarialRoutes = require('./routes/adversarialRoutes');
+app.use('/api/adversarial', adversarialRoutes);
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
 const startupLogs = [];
