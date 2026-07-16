@@ -18,7 +18,7 @@ export default function FeedbackWidget({ text, predictedLabel, darkMode }) {
   const submitFeedback = async (label) => {
     setError(null);
     try {
-      await api.post(`${import.meta.env.VITE_API_URI}/feedback`, {
+      await api.post('/feedback', {
         text,
         predicted_label: predictedLabel,
         correct_label: label,

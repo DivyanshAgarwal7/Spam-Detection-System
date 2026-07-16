@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, g
 import csv
+import json
 import joblib
 import numpy as np
 import os
@@ -16,6 +17,9 @@ from pathlib import Path
 from flask_cors import CORS
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
+
 from utils.spamSeverity import calculate_spam_severity
 from filelock import FileLock, Timeout
 import requests
@@ -140,6 +144,9 @@ def validate_internal_request(f):
         app.logger.info(f"🔐 [ZERO-TRUST] Internal request to {request.path} from {request.remote_addr}")
         return f(*args, **kwargs)
     return decorated_function
+
+# Alias used by routes that gate on the internal service-to-service secret.
+internal_endpoint_required = validate_internal_request
 
 # Apply to all routes by default (except public paths)
 @app.before_request
@@ -586,6 +593,13 @@ def make_prediction_response(
         response["translated_text"] = translated_text
     if domain_analysis is not None:
         response["domain_analysis"] = domain_analysis
+        # Thin, top-level summary of domain_analysis for consumers that just
+        # want a quick URL risk signal without parsing the full breakdown.
+        response["url_risk"] = {
+            "is_url_present": bool(domain_analysis.get("domains_found")),
+            "score": domain_analysis.get("max_risk_score", 0),
+            "level": domain_analysis.get("overall_risk", "SAFE"),
+        }
     if explanation is not None:
         response["explanation"] = explanation
     if severity is not None:
@@ -605,7 +619,28 @@ def predict():
 
 
     try:
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(silent=True)
+        if data is None:
+            raw_body = request.get_data(cache=True)
+            if raw_body:
+                # get_json(silent=True) returns None both for malformed JSON
+                # and for the valid JSON literal `null` - tell those apart so
+                # the error message doesn't call a well-formed `null` invalid.
+                try:
+                    json.loads(raw_body)
+                except ValueError:
+                    return jsonify({
+                        "error": "Request body must be a valid JSON object"
+                    }), 400
+                return jsonify({
+                    "error": "Request body must be a JSON object, got NoneType"
+                }), 400
+            data = {}
+        elif not isinstance(data, dict):
+            return jsonify({
+                "error": f"Request body must be a JSON object, got {type(data).__name__}"
+            }), 400
+
         text = data.get("text")
         input_type = data.get("type", "message")
 
@@ -866,6 +901,72 @@ def feedback():
     except Exception as e:
         app.logger.error(f"Failed to write feedback: {e}")
         return jsonify({"error": "Failed to record feedback."}), 500
+
+
+@app.route("/feedback/stats", methods=["GET"])
+@validate_request
+@validate_internal_request
+def feedback_stats():
+    """Aggregate view of submitted feedback (issue #823): the /feedback
+    endpoint has always been write-only, with no way to see what's been
+    collected without opening the CSV by hand."""
+    if not os.path.isfile(FEEDBACK_FILE):
+        return jsonify({
+            "total": 0,
+            "corrections": 0,
+            "correction_rate": 0.0,
+            "by_predicted_label": {},
+            "recent": [],
+        })
+
+    try:
+        rows = []
+        with open(FEEDBACK_FILE, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(row)
+    except Exception as e:
+        app.logger.error(f"Failed to read feedback stats: {e}")
+        return jsonify({"error": "Failed to read feedback data."}), 500
+
+    total = len(rows)
+    corrections = 0
+    by_predicted_label = {}
+
+    for row in rows:
+        predicted = row.get("predicted_label") or "unknown"
+        correct = row.get("correct_label") or "unknown"
+        is_correction = predicted != correct
+
+        bucket = by_predicted_label.setdefault(predicted, {
+            "total": 0,
+            "corrections": 0,
+            "corrected_to": {},
+        })
+        bucket["total"] += 1
+        if is_correction:
+            corrections += 1
+            bucket["corrections"] += 1
+            bucket["corrected_to"][correct] = bucket["corrected_to"].get(correct, 0) + 1
+
+    recent = list(reversed(rows))[:20]
+    recent = [
+        {
+            "text_preview": (row.get("text") or "")[:100],
+            "predicted_label": row.get("predicted_label"),
+            "correct_label": row.get("correct_label"),
+            "submitted_at": row.get("submitted_at"),
+        }
+        for row in recent
+    ]
+
+    return jsonify({
+        "total": total,
+        "corrections": corrections,
+        "correction_rate": round(corrections / total, 4) if total else 0.0,
+        "by_predicted_label": by_predicted_label,
+        "recent": recent,
+    })
 
 
 # ============================================

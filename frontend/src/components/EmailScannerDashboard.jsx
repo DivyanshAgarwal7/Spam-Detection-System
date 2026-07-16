@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTheme } from "../context/ThemeContext";
-import api from "../utils/axiosInstance";
+import api, { pythonApi } from "../utils/axiosInstance";
 
 export default function EmailScannerDashboard() {
   const { isDark, activeTheme } = useTheme();
@@ -59,10 +59,6 @@ const checkConnectionStatus = async () => {
   }
 };
 
-// Auth, user data — Node
-const fetchUser = async () => {
-  const res = await api.get("/user/profile");
-};
   const refreshImapStatus = async () => {
     try {
       const res = await api.get("/imap/status");

@@ -37,3 +37,4 @@ scikit-learn>=1.2.0
 html2image>=2.0.0
 
 numpy>=1.23.0
+filelock

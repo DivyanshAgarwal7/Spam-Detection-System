@@ -1,6 +1,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Docker Build](https://github.com/Userunknown84/Spam-Detection-System/actions/workflows/docker.yml/badge.svg)
+[![CI](https://github.com/Userunknown84/Spam-Detection-System/actions/workflows/ci.yml/badge.svg)](https://github.com/Userunknown84/Spam-Detection-System/actions/workflows/ci.yml)
 
 # 🚀 Spam Detection System
 
@@ -218,6 +219,11 @@ The Spam Detection System now returns human-readable explanation details with ev
     "overall_risk": "SAFE",
     "details": []
   },
+  "url_risk": {
+    "is_url_present": false,
+    "score": 0,
+    "level": "SAFE"
+  },
   "explanation": {
     "score": 94,
     "reasons": [
@@ -271,6 +277,37 @@ curl -X POST http://localhost:5000/predict \
 * The response is backward compatible with existing integrations.
 * `result` and `prediction` both return the same label.
 * `explanation` is optional in older API clients, but modern clients can use it to display detailed spam reasoning.
+
+## 🔗 URL / Phishing Risk Detection
+
+Every `/predict` call scans the input text for URLs (`domain_checker.py`) and reports the result two ways:
+
+* **`domain_analysis`** – the full breakdown: every domain found, each domain's individual risk report (`age_days`, `blacklisted`, `blacklist_details`, `threat_intel_details`, `risk_score`, `risk_level`, `recommendation`), and the overall `max_risk_score` / `overall_risk` across all domains in the message.
+* **`url_risk`** – a thin, top-level summary of `domain_analysis` for clients that just want a quick signal without parsing the full structure:
+
+  | Field | Description |
+  |---|---|
+  | `is_url_present` | `true` if any URL/domain was found in the text |
+  | `score` | Highest risk score (0-100) across all domains found |
+  | `level` | `SAFE`, `WARNING`, or `BLOCK` |
+
+Risk scoring combines several signals per domain:
+
+* **Domain age** – looked up via WHOIS (`python-whois`); newly registered domains score higher risk.
+* **DNSBL blacklists** – checked via `dnspython` against Spamhaus ZEN, SpamCop, Barracuda, and Spamhaus DBL.
+* **Threat intelligence** – always checks URLhaus (no key required); optionally checks Google Safe Browsing and VirusTotal if API keys are configured.
+* **Heuristics** (`api.py`) – IP-literal hosts, punycode hosts, `@` in the URL, excessive hyphens, and suspicious TLDs (`.tk`, `.ml`, `.ga`, `.cf`, `.gq`, `.xyz`, `.top`, `.work`, `.click`, `.loan`, `.men`, `.review`) feed into the dedicated URL classifier used when `type` is `"url"`.
+
+To enable the optional threat-intel providers, set these environment variables for the Flask API:
+
+```bash
+SAFE_BROWSING_API_KEY=your_google_safe_browsing_key   # optional
+VIRUSTOTAL_API_KEY=your_virustotal_key                 # optional
+```
+
+Without these keys, URLhaus and the WHOIS/DNSBL checks still run — the risk score just won't include Safe Browsing or VirusTotal verdicts.
+
+The frontend's URL preview (hover on a detected link) shows this same `url_risk` signal once a prediction has run, falling back to a lightweight local heuristic (known shortener domains, suspicious keywords) before the first prediction.
 
 ## Mongo Db Atlas Backend
 .env
@@ -365,7 +402,11 @@ export default App;
 
 ## 📱 React Native App (Android & iOS)
 
-### 📦 Setup
+The actual mobile app lives in `spamdetection/` (Expo). See [`spamdetection/README.md`](spamdetection/README.md) for setup, and specifically its **Configuring the API URL** section for how to point the app at your backend — the API base URL is resolved from `EXPO_PUBLIC_ANDROIDAPI`/`EXPO_PUBLIC_IOSAPI` env vars (`spamdetection/.env.example`), not hardcoded, with working defaults for the Android emulator/iOS simulator and a console warning + LAN-IP instructions for real-device testing.
+
+### 📦 Setup (building your own client from scratch)
+
+If you're building a separate React Native client against this backend rather than using `spamdetection/`, the same principle applies: don't hardcode an IP, read it from an env var with a documented fallback.
 
 ```bash
 npx create-expo-app
@@ -379,12 +420,17 @@ import { useState } from "react";
 import { View, Text, TextInput, Button } from "react-native";
 import axios from "axios";
 
+// Prefer an env var (e.g. EXPO_PUBLIC_API_URL) over a hardcoded IP - see
+// spamdetection/constants/api.ts for a fuller example with platform
+// detection and a missing-config warning.
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3000";
+
 export default function App() {
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
 
   const predict = async () => {
-    const res = await axios.post("http://YOUR_IP:3000/predict", { text });
+    const res = await axios.post(`${API_URL}/predict`, { text });
     setResult(res.data.result);
   };
 
@@ -497,11 +543,46 @@ python retrain.py
 
 This merges `feedback_store.csv` with the original training dataset (`DATASET_PATH`, default `dataset.csv`), retrains the TF-IDF vectorizer, LinearSVC model and label encoder, and overwrites `linear_svm_model.pkl`, `tfidf_vectorizer.pkl` and `label_encoder.pkl`.
 
+### Reviewing collected feedback
+
+`POST /feedback` was write-only until now — there was no way to see what had been collected without opening `feedback_store.csv` by hand. `GET /feedback/stats` (available on both the Node backend and the Flask ML API, same auth requirements as `POST /feedback`) aggregates it:
+
+```json
+{
+  "total": 5,
+  "corrections": 2,
+  "correction_rate": 0.4,
+  "by_predicted_label": {
+    "ham": {
+      "total": 3,
+      "corrections": 1,
+      "corrected_to": { "spam": 1 }
+    }
+  },
+  "recent": [
+    {
+      "text_preview": "Congratulations! You won a free prize, click here",
+      "predicted_label": "ham",
+      "correct_label": "spam",
+      "submitted_at": "2026-07-13T20:43:57.011074+00:00"
+    }
+  ]
+}
+```
+
+* `total` / `corrections` / `correction_rate` — overall counts and what fraction of feedback disagreed with the model.
+* `by_predicted_label` — per predicted label, how often it was confirmed vs. corrected, and what it was corrected to.
+* `recent` — the 20 most recent submissions, most recent first (`text_preview` is truncated to 100 characters).
+
+The web app's "Insights" tab shows this under **User Feedback**.
+
 ---
 ## .env.example (Frontend)
 VITE_GOOGLE_CLIENT_ID=your_google_client_id_here
 VITE_API_URI=http://localhost:3000
 VITE_PYTHON_URI=http://127.0.0.1:5000
+
+If either `VITE_API_URI` or `VITE_PYTHON_URI` is missing, the app falls back to the localhost defaults shown above (so local development still works with no `.env` at all) but logs a console warning explaining that a real deployment needs it set explicitly - see `frontend/src/utils/axiosInstance.js`.
 
 ---
 
