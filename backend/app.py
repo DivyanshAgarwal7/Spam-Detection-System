@@ -4,6 +4,7 @@ from logging.handlers import RotatingFileHandler
 from flask import request, g
 from flask import Flask,request,jsonify
 import os
+import csv
 import joblib
 import re
 from collections import Counter
@@ -11,6 +12,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import numpy as np
+from utils.spamSeverity import calculate_spam_severity
 
 load_dotenv()
 
@@ -62,6 +65,14 @@ def ratelimit_handler(e):
         "retry_after": 60
     }), 429 
 
+FEEDBACK_FILE = 'feedback_store.csv'
+
+def ensure_feedback_file():
+    if not os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['text', 'predicted_label', 'correct_label', 'submitted_at'])
+
 # ─── LOAD MODELS ────────────────────────────────────────────────
 MODEL_PATH=os.getenv("MODEL_PATH")
 VECTORIZER_PATH=os.getenv("VECTORIZER_PATH")
@@ -111,6 +122,42 @@ def health_check():
     return jsonify(status), 200
 
 
+def make_prediction_response(
+    input_text,
+    result,
+    confidence_score,
+    decision_score,
+    confidence_level,
+    detected_language="en",
+    translated=False,
+    translated_text=None,
+    domain_analysis=None,
+    explanation=None,
+    severity=None
+):
+    """Enforces a strict standardized response schema for all predictions."""
+    response = {
+        "input": input_text,
+        "result": result,
+        "prediction": result,
+        "confidence": round(float(confidence_score) / 100.0, 4) if confidence_score is not None else 0.0,
+        "confidence_score": float(confidence_score) if confidence_score is not None else 0.0,
+        "decision_score": float(decision_score) if decision_score is not None else None,
+        "confidence_level": confidence_level,
+        "detected_language": detected_language,
+        "translated": translated
+    }
+    if translated and translated_text:
+        response["translated_text"] = translated_text
+    if domain_analysis is not None:
+        response["domain_analysis"] = domain_analysis
+    if explanation is not None:
+        response["explanation"] = explanation
+    if severity is not None:
+        response["severity"] = severity
+    return response
+
+
 # ─── PREDICT ENDPOINT ────────────────────────────────────────────
 @app.route("/predict", methods=["POST"])
 @limiter.limit("10 per minute")
@@ -151,21 +198,46 @@ def predict():
 
         logger.info(f"Prediction: '{text[:50]}...' -> {final_output}")
             
-        response_data = {
-            "input": original_text,
-            "prediction": final_output,
-            "detected_language": detected_language,
-            "translated": translated
-        }
-        if translated:
-            response_data["translated_text"] = text
-            
+        import numpy as np
+        decision_score = None
+        confidence_score = 95.0
+        try:
+            if hasattr(model, "decision_function"):
+                decision = model.decision_function(text_vector)
+                if isinstance(decision, np.ndarray):
+                    decision_score = float(np.max(np.abs(decision)))
+                else:
+                    decision_score = float(abs(decision))
+                # Convert to pseudo‑probability
+                prob = 1.0 / (1.0 + np.exp(-decision_score))
+                confidence_score = round(prob * 100, 2)
+        except Exception:
+            confidence_score = 0.0
+            decision_score = None
+
+        if confidence_score >= 80:
+            confidence_level = "high"
+        elif confidence_score >= 60:
+            confidence_level = "medium"
+        else:
+            confidence_level = "low"
+
+        response_data = make_prediction_response(
+            input_text=original_text,
+            result=final_output,
+            confidence_score=confidence_score,
+            decision_score=decision_score,
+            confidence_level=confidence_level,
+            detected_language=detected_language,
+            translated=translated,
+            translated_text=text if translated else None,
+            severity=calculate_spam_severity(original_text)
+        )
         return jsonify(response_data)
 
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     FLASK_PORT = int(os.getenv("FLASK_PORT", 5000))

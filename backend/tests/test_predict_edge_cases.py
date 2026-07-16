@@ -75,3 +75,18 @@ def test_language_detection_seed_is_fixed(client):
     from langdetect import DetectorFactory
 
     assert DetectorFactory.seed == 0
+
+
+def test_predict_no_unbound_local_or_name_error(client):
+    # Regression test for NameError: name 'final_output' is not defined.
+    # Ensure both URL and message prediction flows complete successfully without NameError/UnboundLocalError.
+    res_msg = client.post("/predict", json={"text": "Hello, this is a test message!", "type": "message"})
+    assert res_msg.status_code == 200
+    assert "prediction" in res_msg.get_json()
+    assert res_msg.get_json()["prediction"] is not None
+
+    res_url = client.post("/predict", json={"text": "http://example.com/spam-link", "type": "url"})
+    assert res_url.status_code == 200
+    assert "prediction" in res_url.get_json()
+    assert res_url.get_json()["prediction"] is not None
+

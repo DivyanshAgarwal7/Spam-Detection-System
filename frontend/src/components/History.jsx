@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
@@ -53,7 +53,7 @@ const fetchHistory = async () => {
             });
             setSelectedItems([]);
             fetchHistory();
-        } catch (error) {
+        } catch {
             alert('Failed to delete items');
         }
     };
@@ -73,7 +73,7 @@ const fetchHistory = async () => {
             });
             setSelectedItems([]);
             fetchHistory();
-        } catch (error) {
+        } catch {
             alert('Failed to clear history');
         }
     };

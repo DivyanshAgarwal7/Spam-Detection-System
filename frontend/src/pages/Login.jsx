@@ -39,7 +39,7 @@ const Login = () => {
 
     try {
       const res = await api.post(
-        `${import.meta.env.VITE_API_URI}/api/v1/auth/login`,
+        "/api/v1/auth/login",
         {
           email,
           password,
@@ -68,7 +68,7 @@ const Login = () => {
 
     try {
       const res = await api.post(
-        `${import.meta.env.VITE_API_URI}/api/v1/auth/google`,
+        "/api/v1/auth/google",
         {
           idToken: credentialResponse.credential,
         },

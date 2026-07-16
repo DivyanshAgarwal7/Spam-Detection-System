@@ -29,9 +29,54 @@ model         = joblib.load(BASE_DIR / "linear_svm_model.pkl")
 vectorizer    = joblib.load(BASE_DIR / "backend" / "tfidf_vectorizer.pkl")
 label_encoder = joblib.load(BASE_DIR / "label_encoder.pkl")
 
+# ── Load URL models if they exist ─────────────────────────────────────────────
+URL_MODEL_PATH = BASE_DIR / "url_detector.pkl"
+URL_VECTORIZER_PATH = BASE_DIR / "backend" / "url_vectorizer.pkl"
+if not URL_VECTORIZER_PATH.exists():
+    URL_VECTORIZER_PATH = BASE_DIR / "url_vectorizer.pkl"
+
+if URL_MODEL_PATH.exists() and URL_VECTORIZER_PATH.exists():
+    url_model = joblib.load(URL_MODEL_PATH)
+    url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
+else:
+    url_model = None
+    url_vectorizer = None
+
+URL_LABELS = {0: "safe", 1: "malicious"}
+SUSPICIOUS_TLDS = {
+    "tk", "ml", "ga", "cf", "gq", "xyz", "top", "work", "click", "loan", "men", "review",
+}
+import re
+from urllib.parse import urlparse
+IPV4_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+
+def heuristic_url_is_malicious(url):
+    candidate = url if "://" in url else f"http://{url}"
+    host = urlparse(candidate).hostname or ""
+    if not host:
+        return False
+    if "@" in url:
+        return True
+    if IPV4_RE.match(host):
+        return True
+    if host.startswith("xn--") or ".xn--" in host:
+        return True
+    if host.count("-") >= 3:
+        return True
+    tld = host.rsplit(".", 1)[-1] if "." in host else ""
+    return tld in SUSPICIOUS_TLDS
+
 xai_service = XAIService(model=model, vectorizer=vectorizer, label_encoder=label_encoder)
 
 app = FastAPI(title="Spam Detection System")
+
+# ── Share ML objects with routers via app state (Issue #129) ─────────────────
+# FastAPI has no Flask-style `current_app`. Routers that need the model,
+# vectorizer, or label_encoder (e.g. bulk_predict) read them off
+# request.app.state instead of relying on globals or a circular import.
+app.state.model = model
+app.state.vectorizer = vectorizer
+app.state.label_encoder = label_encoder
 
 # ── CORS setup ────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -46,41 +91,6 @@ app.add_middleware(
 )
 
 # ── Logging Middleware ────────────────────────────────────────────────────────
-import os
-import logging
-from fastapi.responses import JSONResponse
-
-# ── Internal secret gate ──────────────────────────────────────────────────────
-INTERNAL_SECRET_MIN_LENGTH = 32
-
-def _load_internal_secret() -> str:
-    secret = os.getenv("INTERNAL_SECRET")
-    if not secret:
-        raise RuntimeError(
-            "INTERNAL_SECRET is not set. This shared secret authenticates "
-            "requests from the trusted backend and is mandatory. Generate "
-            "one with `python -c \"import secrets; print(secrets.token_urlsafe(32))\"` "
-            "and set it (identically) for both the Node and FastAPI services."
-        )
-    if len(secret) < INTERNAL_SECRET_MIN_LENGTH:
-        raise RuntimeError(
-            f"INTERNAL_SECRET is too short ({len(secret)} characters); it must be at least {INTERNAL_SECRET_MIN_LENGTH} characters."
-        )
-    return secret
-
-INTERNAL_SECRET = _load_internal_secret()
-PUBLIC_PATHS = {"/", "/health"}
-
-@app.middleware("http")
-async def enforce_internal_secret(request: Request, call_next):
-    # Allow CORS preflight and public health checks
-    if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
-        return await call_next(request)
-    provided = request.headers.get("X-Internal-Secret")
-    if not provided or provided != INTERNAL_SECRET:
-        return JSONResponse(status_code=403, content={"error": "Forbidden: requests must originate from the trusted backend"})
-    return await call_next(request)
-
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.time()
@@ -127,27 +137,16 @@ def predict(body: PredictIn):
         # FIX: Convert class index → string label using the label encoder
         label = label_encoder.inverse_transform([raw_prediction])[0]
 
-        # Compute decision scores and confidence
-        decision_scores = model.decision_function(vectorized_text)[0]
-        # Decision score is the raw distance for the winning class
-        decision_score = float(np.max(np.abs(decision_scores)))
-        # Convert to pseudo‑probability (same approach as Flask)
-        prob = 1.0 / (1.0 + np.exp(-decision_score))
-        confidence_score = round(prob * 100, 2)
-        # Determine confidence level
-        if confidence_score >= 80:
-            confidence_level = "high"
-        elif confidence_score >= 60:
-            confidence_level = "medium"
-        else:
-            confidence_level = "low"
-        # Return response with standardized fields
+        # ENHANCEMENT: Return a confidence score.
+        # LinearSVC does not support predict_proba(); use decision_function()
+        # instead. The score for each class is its distance from the boundary —
+        # a higher value means the model is more certain of that class.
+        scores = model.decision_function(vectorized_text)[0]
+        confidence = round(float(np.max(scores)), 4)
+
         return {
-            "result": label,            # e.g. "ham", "spam", "smishing"
-            "prediction": label,       # legacy key
-            "confidence_score": confidence_score,
-            "decision_score": decision_score,
-            "confidence_level": confidence_level,
+            "prediction": label,       # e.g. "ham", "spam", "smishing"
+            "confidence": confidence,  # e.g. 1.2345
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -175,6 +174,10 @@ app.include_router(emails_router)
 # EXPORT ROUTES (Issue #23)
 from fastapi_backend.export import router as export_router
 app.include_router(export_router)
+
+# BULK PREDICTION ROUTES (Issue #129)
+from fastapi_backend.bulk_predict import router as bulk_predict_router
+app.include_router(bulk_predict_router)
 
 # ── Run directly ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":

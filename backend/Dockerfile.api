@@ -11,15 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV NLTK_DATA=/tmp/nltk_data
 RUN python -m nltk.downloader punkt stopwords --quiet
 
-COPY linear_svm_model.pkl .
-COPY tfidf_vectorizer.pkl .
-COPY label_encoder.pkl .
-COPY url_detector.pkl .
-COPY url_vectorizer.pkl .
-COPY domain_checker.py .
-COPY email_header_analyzer.py .
-COPY explanation_engine.py .
-COPY api.py .
+COPY . .
 
 EXPOSE 5000
 

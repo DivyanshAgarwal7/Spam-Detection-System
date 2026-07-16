@@ -1,11 +1,13 @@
 from flask import current_app
-
+import numpy as np
+import sys
+from pathlib import Path
+from email_header_analyzer import analyze_headers
+    
 try:
     # Import standard headers analyzer if available
-    import sys
-    from pathlib import Path
+    
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from email_header_analyzer import analyze_headers
 except ImportError:
     analyze_headers = None
 
@@ -27,15 +29,17 @@ def scan_emails_with_model(emails):
     
     # Extract email subjects and bodies for batch vectorization
     texts = [f"{e['subject']}. {e['body']}" for e in emails]
-    
     if texts:
+        
         text_vectors = vectorizer.transform(texts)
         predictions = model.predict(text_vectors)
         final_outputs = label_encoder.inverse_transform(predictions)
+        decisions = model.decision_function(text_vectors)
     else:
         final_outputs = []
+        decisions = []
         
-    for e, pred in zip(emails, final_outputs):
+    for i, (e, pred) in enumerate(zip(emails, final_outputs)):
         pred_str = str(pred)
         # Classify as spam if not explicitly 'ham' or 'safe'
         is_spam = pred_str.lower() not in ("ham", "safe")
@@ -45,14 +49,30 @@ def scan_emails_with_model(emails):
         else:
             safe_count += 1
             
+        
+        dec_score = float(np.max(np.abs(decisions[i])))
+        prob = 1.0 / (1.0 + np.exp(-dec_score))
+        conf_score = round(prob * 100, 2)
+        
+        if conf_score >= 80:
+            conf_level = "high"
+        elif conf_score >= 60:
+            conf_level = "medium"
+        else:
+            conf_level = "low"
+            
         email_result = {
             "id": e.get("id"),
             "subject": e.get("subject", "No Subject"),
             "sender": e.get("sender", "Unknown Sender"),
             "date": e.get("date", "Unknown Date"),
-            "prediction": pred_str
+            "prediction": pred_str,
+            "result": pred_str,
+            "confidence": round(conf_score / 100.0, 4),
+            "confidence_score": conf_score,
+            "decision_score": dec_score,
+            "confidence_level": conf_level
         }
-        
         # Phishing integration preparation (optional header analysis)
         has_header_risk = False
         if analyze_headers and e.get("raw_headers"):

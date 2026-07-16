@@ -73,6 +73,14 @@ class AdversarialAugmentor:
         # Noise patterns
         self.noise_chars = ['.', '!', '?', ',', ';', ':', ' ']
 
+        
+        # Spam trigger patterns
+        self.spam_triggers = [
+            'urgent', 'free', 'claim', 'prize', 'winner', 'congratulations',
+            'limited time', 'act now', 'exclusive', 'guaranteed', 'money back',
+            'cash', 'bonus', 'credit', 'loan', 'investment', 'profit'
+        ]
+
     def character_substitution(self, text, intensity=0.3):
         """Replace characters with visually similar alternatives"""
         result = list(text)
@@ -89,6 +97,9 @@ class AdversarialAugmentor:
             word_lower = word.lower().strip('.,!?')
             if word_lower in self.synonyms and random.random() < intensity:
                 new_word = random.choice(self.synonyms[word_lower])
+
+                # Preserve punctuation
+
                 punct = word[-1] if word[-1] in '.,!?' else ''
                 result.append(new_word + punct)
             else:
@@ -112,6 +123,29 @@ class AdversarialAugmentor:
         variants = []
         for _ in range(num_variants):
             variant = text
+
+    def sentence_rephrasing(self, text):
+        """Simple sentence rephrasing (rule-based)"""
+        # This is a simple version - can be enhanced with LLM
+        patterns = [
+            (r'claim your (.*?) now', r'you can get your \1 today'),
+            (r'you have won', r'congratulations, you are the winner of'),
+            (r'click here', r'visit this link'),
+            (r'free (.*?)', r'complimentary \1'),
+            (r'urgent', r'important'),
+        ]
+        result = text
+        for pattern, replacement in patterns:
+            result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+        return result
+
+    def generate_variants(self, text, num_variants=5):
+        """Generate multiple adversarial variants"""
+        variants = []
+        
+        for _ in range(num_variants):
+            variant = text
+            # Apply random transformations
             transformations = random.sample([
                 ('char', 0.2 + random.random() * 0.3),
                 ('synonym', 0.2 + random.random() * 0.3),
@@ -126,6 +160,12 @@ class AdversarialAugmentor:
                 elif transform_type == 'noise':
                     variant = self.noise_injection(variant, intensity)
             
+
+            # Sometimes rephrase
+            if random.random() < 0.3:
+                variant = self.sentence_rephrasing(variant)
+            
+
             variants.append(variant)
         
         return variants
@@ -167,6 +207,72 @@ def create_sample_dataset():
     ]
     df = pd.DataFrame(samples, columns=['text', 'label'])
     print(f"✅ Created sample dataset with {len(df)} samples")
+
+    """Load and combine email + SMS datasets"""
+    data = []
+    
+    # Try to load main dataset
+    if os.path.exists(DATASET_PATH):
+        df = pd.read_csv(DATASET_PATH)
+        if 'text' in df.columns and 'label' in df.columns:
+            data.extend(df[['text', 'label']].values.tolist())
+            print(f"✅ Loaded {len(df)} samples from {DATASET_PATH}")
+    
+    # Try to load SMS dataset
+    sms_path = BASE_DIR / 'sms_spam.csv'
+    if os.path.exists(sms_path):
+        sms_df = pd.read_csv(sms_path)
+        # Try different column formats
+        text_col = next((col for col in sms_df.columns if col.lower() in ['text', 'message', 'sms']), None)
+        label_col = next((col for col in sms_df.columns if col.lower() in ['label', 'spam', 'type', 'class']), None)
+        if text_col and label_col:
+            data.extend(sms_df[[text_col, label_col]].values.tolist())
+            print(f"✅ Loaded {len(sms_df)} samples from {sms_path}")
+    
+    # Try to load email dataset
+    email_path = BASE_DIR / 'email_spam.csv'
+    if os.path.exists(email_path):
+        email_df = pd.read_csv(email_path)
+        text_col = next((col for col in email_df.columns if col.lower() in ['text', 'message', 'email', 'body']), None)
+        label_col = next((col for col in email_df.columns if col.lower() in ['label', 'spam', 'type', 'class']), None)
+        if text_col and label_col:
+            data.extend(email_df[[text_col, label_col]].values.tolist())
+            print(f"✅ Loaded {len(email_df)} samples from {email_path}")
+    
+    if not data:
+        print("❌ No datasets found. Please place dataset.csv in backend/")
+        return None
+    
+    # Create DataFrame
+    df = pd.DataFrame(data, columns=['text', 'label'])
+    
+    # Clean data
+    df = df.dropna()
+    df = df[df['text'].str.len() > 3]
+    
+    # Normalize labels
+    label_map = {
+        'spam': 'spam',
+        'ham': 'ham',
+        'legitimate': 'ham',
+        'safe': 'ham',
+        'phishing': 'spam',
+        'malicious': 'spam',
+        'offensive': 'spam',
+        '1': 'spam',
+        '0': 'ham',
+        'true': 'spam',
+        'false': 'ham'
+    }
+    
+    df['label'] = df['label'].str.lower().map(label_map).fillna('ham')
+    
+    print(f"\n📊 Dataset Summary:")
+    print(f"   Total samples: {len(df)}")
+    print(f"   Spam: {len(df[df['label']=='spam'])}")
+    print(f"   Ham: {len(df[df['label']=='ham'])}")
+    
+
     return df
 
 
@@ -178,6 +284,7 @@ def train_adversarial_model(df):
     """Train model with adversarial examples"""
     
     print("\n🔄 Generating adversarial examples...")
+
     augmentor = AdversarialAugmentor()
     
     # Separate spam and ham
@@ -229,6 +336,7 @@ def train_adversarial_model(df):
         ('lr', LogisticRegression(class_weight='balanced', max_iter=1000, random_state=42))
     ]
     
+
     trained_models = {}
     for name, model in models:
         print(f"   Training {name}...")
@@ -260,12 +368,16 @@ def train_adversarial_model(df):
 def main():
     print("=" * 60)
     print("🛡️ Adversarial Training for Spam Detection")
+
+    print("🚀 Adversarial Training for Spam Detection")
     print("=" * 60)
     
     # Load datasets
     df = load_datasets()
     if df is None:
         print("\n❌ No dataset available")
+
+        print("\n❌ Please ensure dataset.csv exists in backend/")
         return
     
     # Train model
@@ -278,13 +390,17 @@ def main():
     print(f"💾 Saving vectorizer to {VECTORIZER_OUTPUT_PATH}")
     pickle.dump(vectorizer, open(VECTORIZER_OUTPUT_PATH, 'wb'))
     
-    # Save label encoder
+
+    # Save label encoder (for compatibility)
+
     from sklearn.preprocessing import LabelEncoder
     le = LabelEncoder()
     le.fit(['ham', 'spam'])
     pickle.dump(le, open(LABEL_ENCODER_PATH, 'wb'))
     
     print("\n✅ Adversarial training complete!")
+    print("\n✅ Training complete!")
+
     print(f"   Model saved: {MODEL_OUTPUT_PATH}")
     print(f"   Vectorizer saved: {VECTORIZER_OUTPUT_PATH}")
     print("\n📝 To use the robust model, update your .env:")
@@ -292,6 +408,7 @@ def main():
     print(f"   VECTORIZER_PATH={VECTORIZER_OUTPUT_PATH}")
     print(f"   CONFIDENCE_THRESHOLD=0.6")
     print(f"   FLAG_LOW_CONFIDENCE=true")
+
 
 
 if __name__ == "__main__":

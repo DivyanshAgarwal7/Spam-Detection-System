@@ -1,7 +1,10 @@
 import csv
+import hashlib
 import os
 import re
-from collections import Counter
+import threading
+import time
+from collections import Counter, OrderedDict
 
 # Custom stop words list
 STOP_WORDS = {
@@ -135,12 +138,6 @@ def load_data():
                 pass
                 
     return messages
-
-import threading
-import time
-import hashlib
-import json
-from collections import OrderedDict
 
 # Configuration
 _MAX_CACHE_ENTRIES = int(os.getenv("SPAM_INSIGHTS_MAX_CACHE_ENTRIES", "5"))
