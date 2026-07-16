@@ -31,3 +31,16 @@ router.delete("/", clearHistory);
 
 router.get('/count', getHistoryCount);
 module.exports = router;
+
+router.get('/recent',protect, async(req,res)=> {
+  try{
+    const predictions= await Prediction.find({userId: req.user.id })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('text result createdAt');
+
+      res.json(predictions);
+  }catch(error){
+    res.status(500).json({ error: 'Failed to fetch recent activity' });
+  }
+    });
