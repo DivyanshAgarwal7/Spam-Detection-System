@@ -12,8 +12,8 @@ const { classifyMlApiError } = require('../utils/errorHelper');
 const validationMessages = require('../utils/validationMessages');
 const History = require('../models/History');
 const Rule = require('../models/Rule');
-const User = require('../models/User');
 const { matchKeywordRule } = require('../utils/keywordRules');
+const { evaluateAdminRules } = require('../utils/adminRuleEvaluator');
 const upload = multer();
 
 // Helper to dispatch webhook
@@ -192,6 +192,45 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
        return res.json(kwResult);
      }
  
+     // ---> NEW: Check Admin Override Rules
+     const adminOverride = evaluateAdminRules(text);
+     if (adminOverride && adminOverride.matched) {
+       const isSpam = ["spam", "malicious", "smishing"].includes(adminOverride.action);
+       
+       // Save history for admin rule match
+       try {
+         await History.create({
+           user: req.user.id,
+           query: text,
+           prediction: adminOverride.action,
+           type: type,
+           confidence: 1.0,
+         });
+       } catch (historyError) {
+         console.error("Failed to save history for admin rule match:", historyError.message);
+       }
+       
+       console.log(`Admin override matched:`, adminOverride.description);
+       
+       return res.json({
+         input: text,
+         prediction: adminOverride.action,
+         result: adminOverride.action,
+         confidence: 1.0,
+         confidence_score: 100.0,
+         decision_score: null,
+         confidence_level: "high",
+         level_color: isSpam ? "red" : "green",
+         level_emoji: isSpam ? "🔴" : "🟢",
+         rule_applied: "admin_override",
+         explanation: `Matched admin override rule: ${adminOverride.description}`,
+         meta: {
+           source: adminOverride.source,
+           ruleId: adminOverride.ruleId
+         }
+       });
+     }
+
      console.log("Calling Flask...");
  
      // Check ML Cache globally before calling Flask

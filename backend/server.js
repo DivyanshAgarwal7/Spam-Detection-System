@@ -12,6 +12,7 @@ validateEnv(); // Validate environment variables
 dns.setServers(["8.8.8.8", "1.1.1.1"]); // ensure SRV records resolve on all networks
 const express = require("express");
 const seedAdminUser = require("./seeders/adminSeeder");
+const { refreshAdminRulesCache } = require("./utils/adminRuleEvaluator");
 const { getHealthStatus } = require('./utils/healthCheck');
 const cors = require("cors");
 const config = require('./config');
@@ -132,6 +133,7 @@ const connectWithRetry = async (retries = 5, delay = 5000) => {
       logger.info(`✅ MongoDB connected successfully (attempt ${attempt})`);
       monitorConnectionPool();
       seedAdminUser();
+      refreshAdminRulesCache();
       return true;
     } catch (err) {
       logger.error(`❌ MongoDB connection attempt ${attempt} failed:`, err.message);
@@ -247,6 +249,7 @@ const historyRoutes = require("./routes/historyRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const ruleRoutes = require("./routes/ruleRoutes");
+const adminRuleRoutes = require("./routes/adminRuleRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 
 
@@ -261,6 +264,7 @@ app.use("/api/v1/history", historyRoutes);
 app.use("/api/v1/analytics", analyticsRoutes);
 app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/rules", ruleRoutes);
+app.use("/api/v1/admin/rules", adminRuleRoutes);
 app.use("/api/v1/reports", reportRoutes);
 
 // Keep old routes for backward compatibility

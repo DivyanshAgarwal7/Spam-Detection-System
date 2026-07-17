@@ -29,6 +29,7 @@ import SpamPatternLibrary from '../components/SpamPatternLibrary';
 import URLPreview from '../components/URLPreview';
 import InstallAppButton from "../components/InstallAppButton";
 import RulesManager from "../components/RulesManager";
+import AdminRulesManager from "../components/AdminRulesManager";
 
 function App() {
   const navigate = useNavigate();
@@ -665,6 +666,14 @@ const analyzeEmojiSentiment = (text) => {
               </button>
                 Rules Manager
               </button>
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => setActiveTab("admin-rules")}
+                  className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "admin-rules" ? "border-current opacity-100 text-purple-500" : "border-transparent opacity-50 hover:opacity-75"}`}
+                >
+                  Admin Rules
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab("history")}
                 className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "history" ? "border-current opacity-100" : "border-transparent opacity-50 hover:opacity-75"}`}
@@ -1090,6 +1099,12 @@ const analyzeEmojiSentiment = (text) => {
             <SpamInsightsDashboard />
           ) : activeTab === "scanner" ? (
             <EmailScannerDashboard />
+          ) : activeTab === "rules" ? (
+            <RulesManager />
+          ) : activeTab === "admin-rules" ? (
+            <AdminRulesManager />
+          ) : activeTab === "history" ? (
+            <History />
           ) : (
             <EmailHeaderAnalyzer />
           )}
