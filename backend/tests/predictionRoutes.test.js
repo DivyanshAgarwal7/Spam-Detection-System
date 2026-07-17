@@ -80,7 +80,7 @@ describe('POST /predict proxy route', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  it('returns 504 when the ML API call times out', async () => {
+  it('returns 200 with fallback data when the ML API call times out', async () => {
     const timeoutError = new Error('timeout of 15000ms exceeded');
     timeoutError.code = 'ECONNABORTED';
     axios.post.mockRejectedValueOnce(timeoutError);
@@ -89,12 +89,12 @@ describe('POST /predict proxy route', () => {
       .post('/predict')
       .send({ text: 'Hello there', type: 'message' });
 
-    expect(res.status).toBe(504);
-    expect(res.body.code).toBe('ML_TIMEOUT');
-    expect(res.body.retryable).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.body.fallback).toBe(true);
+    expect(res.body.prediction).toBeDefined();
   });
 
-  it('returns 503 when the ML API is unreachable', async () => {
+  it('returns 200 with fallback data when the ML API is unreachable', async () => {
     const connError = new Error('connect ECONNREFUSED 127.0.0.1:5000');
     connError.code = 'ECONNREFUSED';
     axios.post.mockRejectedValueOnce(connError);
@@ -103,9 +103,8 @@ describe('POST /predict proxy route', () => {
       .post('/predict')
       .send({ text: 'Hello there', type: 'message' });
 
-    expect(res.status).toBe(503);
-    expect(res.body.code).toBe('ML_SERVICE_UNAVAILABLE');
-    expect(res.body.retryable).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.body.fallback).toBe(true);
   });
 
   it('forwards the ML API upstream 4xx response as a non-retryable error', async () => {
@@ -122,7 +121,7 @@ describe('POST /predict proxy route', () => {
     expect(res.body.retryable).toBe(false);
   });
 
-  it('maps an ML API 500 to a retryable 502', async () => {
+  it('returns 200 with fallback data when ML API returns 500', async () => {
     const upstreamError = new Error('Request failed with status code 500');
     upstreamError.response = { status: 500, data: { error: 'internal error' } };
     axios.post.mockRejectedValueOnce(upstreamError);
@@ -131,8 +130,7 @@ describe('POST /predict proxy route', () => {
       .post('/predict')
       .send({ text: 'Hello there', type: 'message' });
 
-    expect(res.status).toBe(502);
-    expect(res.body.code).toBe('ML_SERVICE_ERROR');
-    expect(res.body.retryable).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.body.fallback).toBe(true);
   });
 });

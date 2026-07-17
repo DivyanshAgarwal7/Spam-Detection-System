@@ -15,6 +15,8 @@ const Rule = require('../models/Rule');
 const User = require('../models/User');
 const { matchKeywordRule } = require('../utils/keywordRules');
 const upload = multer();
+const { mlCircuitBreaker } = require('../utils/circuitBreaker');
+const { getFallbackPrediction } = require('../utils/fallbackDetector');
 
 // Helper to dispatch webhook
 const dispatchWebhook = require('../utils/dispatchWebhook'); // Aapko dispatchWebhook ko bhi alag file mein nikalna padega
@@ -216,7 +218,8 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
      apiUrl = apiUrl.replace(/\/predict\/?$/, "").replace(/\/$/, "") + "/predict";
  
      console.time("ML_API_CALL");
-     const response = await axios.post(
+     
+     const requestFn = () => axios.post(
        apiUrl,
        {
          text: text.trim(),
@@ -231,6 +234,14 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
          timeout: Number(process.env.ML_API_TIMEOUT_MS) || 15000
        }
      );
+
+     const fallbackFn = (error) => {
+       console.warn(`[${req.requestId}] Circuit breaker fallback triggered. Error: ${error.message}`);
+       return { data: getFallbackPrediction(text, type) };
+     };
+
+     const response = await mlCircuitBreaker.fire(requestFn, fallbackFn);
+     
      console.timeEnd("ML_API_CALL");
      console.log("Flask responded:", response.data);
  
