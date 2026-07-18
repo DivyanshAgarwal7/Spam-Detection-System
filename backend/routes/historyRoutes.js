@@ -10,6 +10,7 @@ const {
   getHistoryCount,
 } = require("../controllers/historyController");
 
+const History = require("../models/History");
 const { protect } = require("../middleware/authMiddleware");
 
 router.use(protect);
@@ -30,39 +31,18 @@ router.delete("/:id", deleteHistoryItem);
 router.delete("/", clearHistory);
 
 router.get('/count', getHistoryCount);
-module.exports = router;
 
-router.get('/recent',protect, async(req,res)=> {
-  try{
-    const predictions= await Prediction.find({userId: req.user.id })
+router.get('/recent', protect, async (req, res) => {
+  try {
+    const predictions = await History.find({ user: req.user.id })
       .sort({ createdAt: -1 })
       .limit(10)
-      .select('text result createdAt');
+      .select('query prediction createdAt');
 
-      res.json(predictions);
-  }catch(error){
-    res.status(500).json({ error: 'Failed to fetch recent activity' });
-  }
-    });
-
-router.get('/',protect,async(req,res) => {
-  try{
-    const{startDate, endDate, limit =50 } =req.query;
-
-    const filter = { userId: req.user.id};
-
-    if(startDate){
-      filter.createdAt = { ...filter.createdAt, $gte: new Date(startDate) };
-    }
-    if(endDate){
-      filter.createdAt = { ...filter.createdAt, $lte: new Date(endDate + 'T23:59:59') };
-    }
-    const predictions = await Prediction.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-    
     res.json(predictions);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch history' });
+    res.status(500).json({ error: 'Failed to fetch recent activity' });
   }
 });
+
+module.exports = router;

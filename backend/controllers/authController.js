@@ -1,5 +1,4 @@
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const { validationResult } = require('express-validator');
 const { OAuth2Client } = require('google-auth-library');
 const User = require('../models/User');
@@ -170,7 +169,7 @@ const getMe = async (req, res) => {
     const user = await User.findById(req.user.id).select('-password');
     if (!user) return res.status(404).json({ error: 'User not found.' });
     res.json({ user });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Server error.' });
   }
 };
@@ -412,7 +411,7 @@ const resetPassword = async (req, res) => {
     const secret = process.env.JWT_SECRET + user.password;
     try {
       jwt.verify(token, secret);
-    } catch (err) {
+    } catch {
       return res.status(400).json({ error: 'Invalid or expired token.' });
     }
 
@@ -537,7 +536,7 @@ const getSessionStatus = async (req, res) => {
       expiresAt: new Date(decoded.exp * 1000),
       isExpiringSoon: timeUntilExpiry < 300
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ 
       success: false,
       error: 'Failed to get session status' 
@@ -664,7 +663,7 @@ const getRolesAndPermissions = async (req, res) => {
       permissions: permissions,
       rolePermissions: User.ROLE_PERMISSIONS || {}
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({
       success: false,
       error: 'Failed to get roles and permissions'

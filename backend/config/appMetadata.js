@@ -6,7 +6,7 @@ const getAppVersion = () => {
     const packageJsonPath = path.join(__dirname, "..", "package.json");
     const packageData = fs.readFileSync(packageJsonPath, "utf8");
     return JSON.parse(packageData).version || "unknown";
-  } catch (error) {
+  } catch {
     return "unknown";
   }
 };

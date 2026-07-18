@@ -55,7 +55,7 @@ const getHistory = async (req, res) => {
         hasPrevPage: page > 1,
       },
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({
       error: {
         code: "INTERNAL_SERVER_ERROR",

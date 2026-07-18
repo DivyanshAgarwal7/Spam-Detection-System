@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const { checkPermission } = require('../middleware/zeroTrust');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const SALTING_SCRIPT = path.join(__dirname, '../text_salting_detector.py');
+const VISUAL_SCRIPT = path.join(__dirname, '../visual_detector.py');
 
 router.post('/detect', protect, async (req, res) => {
     try {
@@ -14,26 +13,26 @@ router.post('/detect', protect, async (req, res) => {
             return res.status(400).json({ success: false, error: 'HTML content is required' });
         }
         
-        const result = await runSaltingDetector('detect', { html });
+        const result = await runVisualDetector('detect', { html });
         res.json({ success: true, ...result });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-router.get('/status', protect, checkPermission('view_logs'), async (req, res) => {
+router.get('/status', protect, async (req, res) => {
     try {
-        const status = await runSaltingDetector('status', {});
+        const status = await runVisualDetector('status', {});
         res.json({ success: true, status });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-function runSaltingDetector(command, params = {}) {
+function runVisualDetector(command, params = {}) {
     return new Promise((resolve, reject) => {
         const python = spawn('python', [
-            SALTING_SCRIPT,
+            VISUAL_SCRIPT,
             '--command', command,
             '--params', JSON.stringify(params)
         ]);
