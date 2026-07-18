@@ -30,11 +30,13 @@ import URLPreview from '../components/URLPreview';
 import InstallAppButton from "../components/InstallAppButton";
 import RulesManager from "../components/RulesManager";
 import AdminRulesManager from "../components/AdminRulesManager";
+import AdminFeedbackView from "../components/AdminFeedbackView";
 
 function App() {
   const navigate = useNavigate();
   const [text, setText] = useState("");
   const [result, setResult] = useState("");
+  const [historyId, setHistoryId] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [severity, setSeverity] = useState(null);
   const [explanation, setExplanation] = useState(null);
@@ -371,6 +373,7 @@ const analyzeEmojiSentiment = (text) => {
         localStorage.setItem('firstPrediction', 'true');
       }
       setResult(res.data.prediction);
+      setHistoryId(res.data.historyId || null);
       setConfidence(res.data.confidence ?? null);
       setSeverity(res.data.severity || null);
       setExplanation(res.data.explanation || null);
@@ -667,12 +670,20 @@ const analyzeEmojiSentiment = (text) => {
                 Rules Manager
               </button>
               {user?.role === 'admin' && (
-                <button
-                  onClick={() => setActiveTab("admin-rules")}
-                  className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "admin-rules" ? "border-current opacity-100 text-purple-500" : "border-transparent opacity-50 hover:opacity-75"}`}
-                >
-                  Admin Rules
-                </button>
+                <>
+                  <button
+                    onClick={() => setActiveTab("admin-rules")}
+                    className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "admin-rules" ? "border-current opacity-100 text-purple-500" : "border-transparent opacity-50 hover:opacity-75"}`}
+                  >
+                    Admin Rules
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("admin-feedback")}
+                    className={`pb-1 px-4 transition-all border-b-2 ${activeTab === "admin-feedback" ? "border-current opacity-100 text-purple-500" : "border-transparent opacity-50 hover:opacity-75"}`}
+                  >
+                    Admin Feedback
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setActiveTab("history")}
@@ -1014,13 +1025,14 @@ const analyzeEmojiSentiment = (text) => {
                     )}
 
                     {result && result !== "Error" && type !== "url" && (
-                      <FeedbackWidget key={`${text}|${result}|${confidence}`} text={text} predictedLabel={result} darkMode={isDark} />
+                      <FeedbackWidget key={`${text}|${result}|${confidence}`} text={text} predictedLabel={result} darkMode={isDark} historyId={historyId} />
                     )}
 
                     <button
                       onClick={() => {
                       setText("");
                       setResult("");
+                      setHistoryId(null);
                       setConfidence(null);
                       setExplanation(null);
                       setUrlRisk(null);
@@ -1103,6 +1115,8 @@ const analyzeEmojiSentiment = (text) => {
             <RulesManager />
           ) : activeTab === "admin-rules" ? (
             <AdminRulesManager />
+          ) : activeTab === "admin-feedback" ? (
+            <AdminFeedbackView />
           ) : activeTab === "history" ? (
             <History />
           ) : (

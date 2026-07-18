@@ -284,20 +284,22 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
      console.timeEnd("ML_API_CALL");
      console.log("Flask responded:", response.data);
  
-     // Save history automatically (best-effort)
-     try {
-       await History.create({
-         user: req.user.id,
-         query: text,
-         prediction: response.data.prediction,
-         type: type,
-         confidence: response.data.confidence || response.data.probability,
-       });
-     } catch (historyError) {
-       console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
-     }
- 
-     const finalResponse = response.data;
+     let historyId = null;
+    // Save history automatically (best-effort)
+    try {
+      const historyRecord = await History.create({
+        user: req.user.id,
+        query: text,
+        prediction: response.data.prediction,
+        type: type,
+        confidence: response.data.confidence || response.data.probability,
+      });
+      historyId = historyRecord._id;
+    } catch (historyError) {
+      console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
+    }
+
+    const finalResponse = { ...response.data, historyId };
      if (typeof finalResponse.confidence === "number") {
        finalResponse.confidence = Math.round(finalResponse.confidence * 100) / 100;
      }
@@ -340,7 +342,7 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
 
 router.post("/feedback", protect, async (req, res) => {
  try {
-    const { text, predicted_label, correct_label } = req.body;
+    const { text, predicted_label, correct_label, historyId, note } = req.body;
 
     if (!text || !correct_label) {
       return res
@@ -349,16 +351,47 @@ router.post("/feedback", protect, async (req, res) => {
           success: false,
           message: "Validation failed",
           error: validationMessages.feedbackFieldsRequired
-});
+        });
     }
 
-    const response = await axios.post(`${ML_API_BASE}/feedback`, {
-      text,
-      predicted_label,
-      correct_label,
-    });
+    if (historyId) {
+      try {
+        const label = predicted_label.toLowerCase() === correct_label.toLowerCase() ? 'correct' : 'incorrect';
+        await History.findByIdAndUpdate(historyId, {
+          feedback: {
+            label,
+            note: note || '',
+            submittedAt: new Date()
+          }
+        });
+      } catch (err) {
+        console.error(`[${req.requestId}] Failed to update History document with feedback:`, err.message);
+        return res.status(500).json({ error: "Failed to record feedback in database" });
+      }
+    }
 
-    res.status(response.status).json(response.data);
+    let flaskFailed = false;
+    let response;
+    try {
+      response = await axios.post(`${ML_API_BASE}/feedback`, {
+        text,
+        predicted_label,
+        correct_label,
+      });
+    } catch (flaskErr) {
+      console.error(`[${req.requestId}] Flask ML API failed to record feedback:`, flaskErr.message);
+      flaskFailed = true;
+      // We still return success if MongoDB succeeded, as per fallback plan.
+      if (!historyId) {
+        throw flaskErr;
+      }
+    }
+
+    if (flaskFailed) {
+      res.status(201).json({ message: "Feedback recorded in database, but failed to sync to ML engine.", historyId });
+    } else {
+      res.status(response.status).json({ ...response.data, historyId });
+    }
   } catch (error) {
     // Capture error in Sentry with context
     Sentry.captureException(error, {

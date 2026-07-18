@@ -250,6 +250,7 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const ruleRoutes = require("./routes/ruleRoutes");
 const adminRuleRoutes = require("./routes/adminRuleRoutes");
+const feedbackAdminRoutes = require("./routes/feedbackAdminRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const jobRoutes = require("./routes/jobRoutes");
 
@@ -289,6 +290,7 @@ app.use("/api/v1/analytics", analyticsRoutes);
 app.use("/api/v1/chat", chatRoutes);
 app.use("/api/v1/rules", ruleRoutes);
 app.use("/api/v1/admin/rules", adminRuleRoutes);
+app.use("/api/v1/feedback/admin", feedbackAdminRoutes);
 app.use("/api/v1/reports", reportRoutes);
 app.use("/api/v1/jobs", jobRoutes);
 
