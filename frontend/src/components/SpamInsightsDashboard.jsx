@@ -32,6 +32,7 @@ export default function SpamInsightsDashboard() {
 
   useEffect(() => {
     fetchInsights();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCategoryChange = (e) => {

@@ -55,10 +55,11 @@ const evaluateAdminRules = (text) => {
       const patternLower = rule.pattern.toLowerCase();
 
       switch (rule.type) {
-        case 'regex':
+        case 'regex': {
           const regex = new RegExp(rule.pattern, 'i');
           isMatch = regex.test(text);
           break;
+        }
         case 'keyword':
           isMatch = textLower.includes(patternLower);
           break;

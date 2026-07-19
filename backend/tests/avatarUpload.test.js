@@ -26,7 +26,24 @@ function startServer() {
 
 function uploadFile(url, { bytes, mimetype, filename }) {
   const form = new FormData();
-  const blob = new Blob([Buffer.alloc(bytes, 1)], { type: mimetype });
+  let baseBuffer = Buffer.alloc(0);
+  if (mimetype === 'image/jpeg') {
+    baseBuffer = Buffer.from('ffd8ffe000104a46494600010101006000600000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b080001000101011100ffc4000f0001010000000000000000000000000000ffda0008010100003f0037ffd9', 'hex');
+  } else if (mimetype === 'image/png') {
+    baseBuffer = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789cc3600000000200012705a6160000000049454e44ae426082', 'hex');
+  } else if (mimetype === 'image/webp') {
+    baseBuffer = Buffer.from('5249464620000000574542505650382014000000d001009d012a010001000225a40003c000000885848800', 'hex');
+  }
+
+  let buffer;
+  if (baseBuffer.length >= bytes) {
+    buffer = baseBuffer.subarray(0, bytes);
+  } else {
+    const padding = Buffer.alloc(bytes - baseBuffer.length, 1);
+    buffer = Buffer.concat([baseBuffer, padding]);
+  }
+
+  const blob = new Blob([buffer], { type: mimetype });
   form.append("avatar", blob, filename);
   return fetch(url, { method: "POST", body: form });
 }
