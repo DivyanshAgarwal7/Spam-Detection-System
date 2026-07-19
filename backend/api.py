@@ -500,7 +500,7 @@ def heuristic_url_is_malicious(url):
     tld = host.rsplit(".", 1)[-1] if "." in host else ""
     return tld in SUSPICIOUS_TLDS
 
-MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 10000))
+MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 5000))
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -656,15 +656,6 @@ def predict():
                 "error": f"'text' must be a string, got {type(text).__name__}"
             }), 400
 
-        normalized_text = normalizer.normalize(text)
-        vectorized = vectorizer.transform([normalized_text])
-        prediction = model.predict(vectorized)[0]
-    
-        return jsonify({
-          'original_text': text,
-          'normalized_text': normalized_text,
-          'prediction': prediction
-        })
 
         # Maximum-length validation before any vectorization/inference work.
         if len(text) > MAX_MESSAGE_LENGTH:
@@ -1360,6 +1351,107 @@ def imap_connect():
         "message": "Inbox connected. Scheduled scanning is now active.",
         "scan_interval_minutes": scan_interval_minutes,
     })
+
+
+@app.route("/imap/status", methods=["GET"])
+@validate_request
+@validate_internal_request
+def imap_status():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"connected": False})
+
+    return jsonify({
+        "connected": True,
+        "host": conn_row["host"],
+        "imap_username": conn_row["imap_username"],
+        "scan_interval_minutes": conn_row["scan_interval_minutes"],
+        "consent_given_at": conn_row["consent_given_at"],
+        "last_scan_at": conn_row["last_scan_at"],
+    })
+
+
+@app.route("/imap/schedule", methods=["PUT"])
+@validate_request
+@validate_internal_request
+def imap_schedule():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    data = request.get_json(silent=True) or {}
+    scan_interval_minutes = data.get("scan_interval_minutes")
+
+    if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
+        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    imap_store.update_schedule(username, scan_interval_minutes)
+    _schedule_user_job(username, scan_interval_minutes)
+    return jsonify({"message": "Scan schedule updated", "scan_interval_minutes": scan_interval_minutes})
+
+
+@app.route("/imap/disconnect", methods=["POST"])
+@validate_request
+@validate_internal_request
+def imap_disconnect():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    if not imap_store.get_connection(username):
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    job_id = f"imap_scan_{username}"
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    imap_store.delete_connection(username)
+    return jsonify({"message": "Inbox disconnected and stored credentials removed."})
+
+
+@app.route("/imap/scan-now", methods=["POST"])
+@validate_request
+@validate_internal_request
+def imap_scan_now():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    conn_row = imap_store.get_connection(username)
+    if not conn_row:
+        return jsonify({"error": "No connected inbox found for this account"}), 404
+
+    try:
+        password = decrypt_secret(conn_row["encrypted_password"])
+    except CredentialEncryptionError as e:
+        return jsonify({"error": str(e)}), 500
+
+    try:
+        emails = imap_connector.fetch_imap_emails(
+            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+        )
+        scan_results = scan_emails_with_model(emails)
+        imap_store.save_scan_results(username, scan_results["emails"])
+        imap_store.update_last_scan(username)
+        return jsonify(scan_results)
+    except imap_connector.ImapAuthError as e:
+        return jsonify({"error": f"IMAP authentication failed: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"Email scan execution failed: {e}"}), 500
+
+
+@app.route("/imap/scan-results", methods=["GET"])
+@validate_request
+@validate_internal_request
+def imap_scan_results():
+    username = _require_username()
+    if not username:
+        return jsonify({"error": "Missing X-User-Username header"}), 401
+    limit = request.args.get("limit", default=100, type=int)
+    history = imap_store.get_scan_history(username, limit=limit)
+    return jsonify({"results": history})
 
 
 # ============================================

@@ -28,8 +28,9 @@ def parse_and_predict_file(file):
         return None, "Empty file uploaded."
         
     try:
-        # Use a text wrapper around the uploaded file stream for proper decoding.
-        text_wrapper = io.TextIOWrapper(file.stream, encoding="utf-8", errors="replace")
+        content_bytes = file.read()
+        content_str = content_bytes.decode("utf-8", errors="replace")
+        text_wrapper = io.StringIO(content_str)
     except Exception:
         return None, "Failed to read uploaded file."
 
