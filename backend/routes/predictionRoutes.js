@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { explainPrediction } = require('../controllers/xaiController');
 const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
@@ -758,6 +759,9 @@ router.get('/stats', protect, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
+
+
+router.post("/api/predict/explain", predictLimiter, protect, explainPrediction);
 
 
 module.exports = router;

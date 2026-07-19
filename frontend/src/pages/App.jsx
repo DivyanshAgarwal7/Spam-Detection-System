@@ -42,6 +42,8 @@ function App() {
   const [severity, setSeverity] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [urlRisk, setUrlRisk] = useState(null);
+  const [aiExplanation, setAiExplanation] = useState("");
+  const [loadingAiExplanation, setLoadingAiExplanation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [type, setType] = useState("message");
   const [errorInfo, setErrorInfo] = useState(null);
@@ -360,6 +362,7 @@ const analyzeEmojiSentiment = (text) => {
     }
     setLastCall(now);
     setRateLimitError('');
+    setAiExplanation("");
   
     if (loading) return;
       try {
@@ -420,6 +423,24 @@ const analyzeEmojiSentiment = (text) => {
   });
   } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAiExplanation = async () => {
+    if (!text || !result) return;
+    setLoadingAiExplanation(true);
+    setAiExplanation("");
+    try {
+      const response = await api.post("/api/predict/explain", {
+        text,
+        prediction: result
+      });
+      setAiExplanation(response.data.explanation);
+    } catch (error) {
+      console.error("Failed to fetch AI explanation:", error);
+      setAiExplanation("Failed to load explanation. Please check your network or Groq API configuration.");
+    } finally {
+      setLoadingAiExplanation(false);
     }
   };
 
@@ -868,6 +889,58 @@ const analyzeEmojiSentiment = (text) => {
                       result={result} 
                       darkMode={isDark} 
                      />
+                    )}
+
+                    {/* Groq-powered AI Explanation */}
+                    {result && result !== "Error" && (
+                      <div className="mt-4 text-left">
+                        {!aiExplanation && !loadingAiExplanation && (
+                          <button
+                            onClick={fetchAiExplanation}
+                            className={`w-full py-3 px-4 rounded-2xl border text-sm font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                              isDark
+                                ? "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200"
+                                : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+                            }`}
+                          >
+                            ❓ Why was this classified as {result}?
+                          </button>
+                        )}
+
+                        {loadingAiExplanation && (
+                          <div className={`p-4 rounded-2xl border animate-pulse ${
+                            isDark ? "bg-slate-800/60 border-slate-700" : "bg-slate-50 border-slate-200"
+                          }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-slate-500 text-xs">🤖 Loading AI Explanation...</span>
+                            </div>
+                            <div className="h-4 bg-slate-300 dark:bg-slate-700 rounded w-5/6 mb-2"></div>
+                            <div className="h-4 bg-slate-300 dark:bg-slate-700 rounded w-3/4"></div>
+                          </div>
+                        )}
+
+                        {aiExplanation && (
+                          <div className={`p-5 rounded-2xl border text-sm leading-relaxed transition-all duration-500 shadow-sm ${
+                            isDark 
+                              ? "bg-slate-800/60 border-slate-700 text-slate-300" 
+                              : "bg-slate-50 border-slate-200 text-slate-600"
+                          }`}>
+                            <div className="flex items-center justify-between gap-2 mb-3">
+                              <span className="font-bold text-xs uppercase tracking-wider text-blue-500 dark:text-blue-400">
+                                🤖 AI Analysis Insight
+                              </span>
+                              <button
+                                onClick={() => setAiExplanation("")}
+                                className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+                                title="Clear Explanation"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            <p className="italic">{aiExplanation}</p>
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* Manipulation Index */}
