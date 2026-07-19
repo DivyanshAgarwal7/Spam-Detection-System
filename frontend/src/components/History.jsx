@@ -3,16 +3,6 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 
 
-const escapeHTML = (str) => {
-    if (!str) return '';
-    return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-};
-
 
 const History = () => {
     const [history, setHistory] = useState([]);
@@ -259,7 +249,7 @@ const fetchHistory = async () => {
                             checked={selectedItems.includes(item._id)}
                             onChange={() => toggleSelect(item._id)}
                         />
-                        <span style={{ flex: 1 }}>{escapeHTML(item.query)}</span>
+                        <span style={{ flex: 1 }}>{item.query}</span>
                         {item.confidence != null && (
                             <div style={{ display: 'flex', alignItems: 'center', width: '120px', marginRight: '10px' }}>
                                 <div style={{ 
