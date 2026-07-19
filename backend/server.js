@@ -271,7 +271,7 @@ app.use('/admin/queues', adminAuth, serverAdapter.getRouter());
 
 app.use("/", predictionRoutes);
 app.use("/", emailIntegrationRoutes);
-app.use("/", imapRoutes);
+app.use("/imap", imapRoutes);
 app.use("/", utilityRoutes);
 
 // Versioned routes (v1)
