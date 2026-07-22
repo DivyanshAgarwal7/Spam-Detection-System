@@ -2,6 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
+const headerAnalyzer = require('../services/headerAnalyzer');
+
 const {
   gmailAuthUrl,
   gmailCallback,
@@ -14,6 +16,22 @@ const {
   scanEmails
 } = require('../controllers/emailController');
 
+router.post('/analyze-headers', protect, async (req, res) => {
+  try {
+    const { headers } = req.body;
+    
+    if (!headers) {
+      return res.status(400).json({ error: 'Headers required' });
+    }
+
+    const parsedHeaders = headerAnalyzer.parseHeaders(headers);
+    const result = headerAnalyzer.analyzeHeaders(parsedHeaders);
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to analyze headers' });
+  }
+});
 // ==================== GMAIL ROUTES ====================
 router.get("/gmail/auth-url", protect, gmailAuthUrl);
 router.get("/gmail/callback", gmailCallback);
