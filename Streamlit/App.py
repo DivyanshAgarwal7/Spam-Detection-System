@@ -7,6 +7,16 @@ from docx import Document
 from urllib.parse import urlparse
 import re
 import matplotlib.pyplot as plt
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+def _resolve_model_path(filename):
+    for d in (BASE_DIR, BASE_DIR / "backend"):
+        p = d / filename
+        if p.exists():
+            return p
+    return BASE_DIR / filename
 
 
 suspicious_tlds = [
@@ -28,13 +38,15 @@ st.set_page_config(
 
 @st.cache_resource
 def load_models():
+    text_model = joblib.load(_resolve_model_path("linear_svm_model.pkl"))
+    text_vectorizer = joblib.load(_resolve_model_path("tfidf_vectorizer.pkl"))
+    label_encoder = joblib.load(_resolve_model_path("label_encoder.pkl"))
 
-    text_model = joblib.load("models/linear_svm_model.pkl")
-    text_vectorizer = joblib.load("models/tfidf_vectorizer.pkl")
-    label_encoder = joblib.load("models/label_encoder.pkl")
+    url_model_path = _resolve_model_path("url_detector.pkl")
+    url_vectorizer_path = _resolve_model_path("url_vectorizer.pkl")
 
-    url_model = joblib.load("models/url_detector.pkl")
-    url_vectorizer = joblib.load("models/url_vectorizer.pkl")
+    url_model = joblib.load(url_model_path) if url_model_path.exists() else None
+    url_vectorizer = joblib.load(url_vectorizer_path) if url_vectorizer_path.exists() else None
 
     return (
         text_model,
@@ -43,6 +55,7 @@ def load_models():
         url_model,
         url_vectorizer
     )
+
 
 
 model, vectorizer, encoder, url_detector, url_vectorizer = load_models()
