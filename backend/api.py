@@ -14,6 +14,7 @@ import os
 from   pathlib                  import Path
 import re
 import sys
+from   time                     import perf_counter
 from   urllib.parse             import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
@@ -22,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 from   apscheduler.schedulers.background \
                                 import BackgroundScheduler
-from   crypto_utils             import (decrypt_secret, encrypt_secret)
+from   crypto_utils             import decrypt_secret, encrypt_secret
 from   email_scanner            import scan_emails_with_model
 from   filelock                 import FileLock, Timeout
 from   gmail_connector          import (fetch_gmail_emails, get_gmail_auth_url,
@@ -102,8 +103,10 @@ def _load_internal_secret():
 
 INTERNAL_SECRET = _load_internal_secret()
 
-# Paths reachable without the internal secret (liveness/readiness probes)
-PUBLIC_PATHS = {"/", "/health", "/api/roles", "/api/rate-limit-status"}
+# Paths reachable without the internal secret (liveness/readiness probes, plus
+# /metrics so a Prometheus scraper can reach it without the shared secret — it
+# exposes only aggregate counters, never message content).
+PUBLIC_PATHS = {"/", "/health", "/api/roles", "/api/rate-limit-status", "/metrics"}
 
 
 # ============================================
@@ -160,6 +163,10 @@ internal_endpoint_required = validate_internal_request
 # Apply to all routes by default (except public paths)
 @app.before_request
 def require_internal_secret():
+    # Stamp the request start here (the first before_request to run) so latency
+    # is measured for every request, including ones this hook short-circuits
+    # with a 403 before later before_request hooks can run.
+    g._metrics_start = perf_counter()
     if app.config.get("TESTING") and not app.config.get("ENFORCE_INTERNAL_SECRET"):
         return None
     if request.method == "OPTIONS":
@@ -509,6 +516,9 @@ app.register_blueprint(analytics_bp)
 
 url_model = joblib.load(URL_MODEL_PATH)
 url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
+
+# All models loaded successfully; surface readiness as a scrapeable gauge (#984).
+metrics.set_model_loaded(True)
 # url_detector.pkl predicts numeric classes with no bundled label encoder. The
 # model was trained with benign -> Safe (0) and phishing/malware/defacement ->
 # Malicious (1) (see the "Url Model" dataset-labels table in the README), so 0
@@ -570,6 +580,41 @@ def capture_request_id():
     g.request_id = request.headers.get("X-Request-ID", "unknown-ml-req")
 
 
+# Maps the Flask endpoint that emitted a 429 to the rate-limit policy label, so
+# rejections are attributed to a policy without re-deriving limiter internals.
+# The 429 itself is produced by rate_limiting.rate_limit_exceeded_handler; it is
+# observed here as the response leaves the app.
+_RATE_LIMIT_POLICY_BY_ENDPOINT = {
+    "predict": RateLimitPolicy.PREDICT.value,
+    "gmail_emails": RateLimitPolicy.EMAIL_FETCH.value,
+    "outlook_emails": RateLimitPolicy.EMAIL_FETCH.value,
+    "scan_emails_route": RateLimitPolicy.THREAT_INTEL.value,
+    "bulk_predict": RateLimitPolicy.BULK.value,
+    "bulk_predict_export": RateLimitPolicy.BULK.value,
+}
+
+
+@app.after_request
+def record_request_metrics(response):
+    endpoint = request.endpoint or "unknown"
+    start = getattr(g, "_metrics_start", None)
+    latency = perf_counter() - start if start is not None else 0.0
+    metrics.observe_request(
+        endpoint=endpoint,
+        method=request.method,
+        status=response.status_code,
+        latency=latency,
+    )
+    if response.status_code >= 500:
+        metrics.record_error(endpoint)
+    elif response.status_code == 429:
+        policy = _RATE_LIMIT_POLICY_BY_ENDPOINT.get(
+            endpoint, RateLimitPolicy.DEFAULT.value
+        )
+        metrics.record_rate_limit_rejection(policy)
+    return response
+
+
 # ============================================
 # PUBLIC ROUTES
 # ============================================
@@ -585,6 +630,17 @@ def home():
 @validate_request
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/metrics")
+def metrics_endpoint():
+    """Prometheus exposition endpoint (issue #984).
+
+    Public (see PUBLIC_PATHS): a scraper reaches it without the internal secret
+    since it exposes only aggregate counters, never message content.
+    """
+    payload, content_type = metrics.render()
+    return payload, 200, {"Content-Type": content_type}
 
 
 @app.route("/api/roles", methods=["GET"])
@@ -900,6 +956,8 @@ def predict():
             explanation=explanation,
             severity=severity,
         )
+
+        metrics.record_prediction(result=final_output, input_type=input_type)
 
         return jsonify(response_data)
 

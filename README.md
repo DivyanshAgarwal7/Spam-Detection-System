@@ -381,6 +381,40 @@ limit for operational visibility.
 
 ---
 
+## 📊 Metrics & Monitoring
+
+The Flask ML API exposes a Prometheus-compatible `GET /metrics` endpoint (powered
+by `prometheus-client`). It is public — a scraper reaches it without the internal
+secret because it emits only aggregate counters, never message content — and
+returns the standard `text/plain; version=0.0.4` exposition format.
+
+Metrics collected (labels in parentheses):
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `spam_predictions_total` | Counter | `result`, `input_type` |
+| `spam_request_latency_seconds` | Histogram | `endpoint`, `method` |
+| `spam_requests_total` | Counter | `endpoint`, `method`, `status` |
+| `spam_errors_total` | Counter | `endpoint` |
+| `spam_rate_limit_rejections_total` | Counter | `policy` |
+| `spam_model_loaded` | Gauge | — |
+
+Request counts, latency, errors, and rate-limit rejections are recorded from the
+existing request lifecycle; `spam_model_loaded` is set to `1` once the models load
+at startup.
+
+Sample Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: spam-ml-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:5000"]
+```
+
+---
+
 ## 💻 React Frontend
 
 ### 📦 Setup
