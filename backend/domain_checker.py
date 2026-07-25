@@ -29,25 +29,130 @@ DNSBL_PROVIDERS = [
 # body cannot turn extraction into a performance sink (issue #940).
 MAX_TEXT_LENGTH = 100_000
 
+# Maximum length of a fully-qualified domain name (RFC 1035).
+_MAX_HOSTNAME_LENGTH = 253
+
+# Known public TLDs used to validate extraction candidates (issue #974).
+#
+# extract_domains used to match any "<label>.<2+ letters>" token, so ordinary
+# prose -- "file.txt", "e.g", "the end.Then" -- produced fake domains that then
+# incurred real WHOIS / DNSBL / threat-intel lookups on non-domains. Requiring
+# the final label to be a real TLD is what turns the loose token match into a
+# hostname test.
+#
+# The set is curated and self-contained rather than sourced from a public-suffix
+# dependency: the repo ships no such library, and pulling one in (plus keeping
+# its suffix data refreshed) is disproportionate for a spam heuristic. It covers
+# the ISO-3166 ccTLDs and the widely used gTLDs. Filename-extension look-alikes
+# that also happen to be registry TLDs (e.g. .zip, .mov) are intentionally
+# omitted: in email/message text a "name.zip" token is far more likely a file
+# than a domain, and under-extracting there is the safe direction for a
+# precision fix. An exotic gTLD that is absent is simply not treated as a
+# domain -- again the safe direction.
+_CC_TLDS = frozenset(
+    """
+ac ad ae af ag ai al am ao aq ar as at au aw ax az
+ba bb bd be bf bg bh bi bj bm bn bo br bs bt bw by bz
+ca cc cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz
+de dj dk dm do dz
+ec ee eg er es et eu
+fi fj fk fm fo fr
+ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy
+hk hm hn hr ht hu
+id ie il im in io iq ir is it
+je jm jo jp
+ke kg kh ki km kn kp kr kw ky kz
+la lb lc li lk lr ls lt lu lv ly
+ma mc md me mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz
+na nc ne nf ng ni nl no np nr nu nz
+om
+pa pe pf pg ph pk pl pm pn pr ps pt pw py
+qa
+re ro rs ru rw
+sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st su sv sx sy sz
+tc td tf tg th tj tk tl tm tn to tr tt tv tw tz
+ua ug uk us uy uz
+va vc ve vg vi vn vu
+wf ws
+ye yt
+za zm zw
+""".split()
+)
+
+_G_TLDS = frozenset(
+    """
+com net org edu gov mil int info biz name pro mobi asia tel travel jobs
+coop aero museum cat post arpa
+app dev page xyz online site tech store shop blog cloud email live news
+media agency solutions digital finance systems network global world today
+ventures capital studio design software cyou icu top vip club fun space
+""".split()
+)
+
+KNOWN_TLDS = _CC_TLDS | _G_TLDS
+
+# A single DNS label: 1-63 chars, alphanumeric plus hyphen, no leading/trailing
+# hyphen. Anchored so it validates one already-split label at a time.
+_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+# Host candidate: one or more dot-separated labels followed by an alphabetic
+# TLD. Quantifiers are bounded (labels <= 63 chars, <= 10 levels deep) so the
+# scan stays linear on adversarial label runs (issue #940). The lookbehind stops
+# a match from starting mid-token (so a longer host isn't split); the lookahead
+# stops the alphabetic TLD from being truncated before a trailing label char.
+# The preceding "@" or "/" is deliberately allowed so hosts inside email
+# addresses and scheme-prefixed URLs are still captured.
+_HOST_CANDIDATE_RE = re.compile(
+    r"(?<![\w.-])" r"((?:[a-z0-9-]{1,63}\.){1,10}[a-z]{2,63})" r"(?![a-z0-9-])",
+    re.IGNORECASE,
+)
+
+
+def _normalize_host(host: str) -> str:
+    """Lower-case, drop a trailing root dot, and strip a leading ``www.``.
+
+    ``www`` is stripped so ``https://www.example.com`` and a bare
+    ``example.com`` collapse to the same registrable host for downstream
+    lookups and de-duplication.
+    """
+    host = host.rstrip(".").lower()
+    if host.startswith("www."):
+        host = host[len("www.") :]
+    return host
+
+
+def _is_valid_domain(host: str) -> bool:
+    """True when ``host`` is a syntactically valid hostname with a known TLD."""
+    if not host or len(host) > _MAX_HOSTNAME_LENGTH:
+        return False
+    labels = host.split(".")
+    if len(labels) < 2:
+        return False
+    if not all(_LABEL_RE.match(label) for label in labels):
+        return False
+    return labels[-1] in KNOWN_TLDS
+
 def extract_domains(text: str) -> List[str]:
     """
-    Extract domains from text using regex.
-    Returns unique domains found in the message.
+    Extract domains from text.
+
+    Returns the unique, normalized domains found in the message, sorted for
+    determinism. Only tokens that are shaped like a real hostname *and* end in a
+    known public TLD are returned, so non-domain text (``file.txt``, ``e.g``,
+    ``example.``, bare filenames, sentence fragments with dots) is rejected
+    before it can reach the WHOIS / DNSBL / threat-intel lookups (issue #974).
     """
+    if not text:
+        return []
     if len(text) > MAX_TEXT_LENGTH:
         text = text[:MAX_TEXT_LENGTH]
-    # DNS labels/TLDs are capped at 63 octets; bounding the quantifiers keeps the
-    # scan linear on adversarial label runs without changing which domains match.
-    pattern = r'https?://(?:www\.)?([a-zA-Z0-9-]{1,63}\.[a-zA-Z]{2,63}(?:\.[a-zA-Z]{2,63})?)'
-    urls = re.findall(pattern, text, re.IGNORECASE)
-    
-    # Also find domains not in URL format
-    domain_pattern = r'\b([a-zA-Z0-9-]{1,63}\.[a-zA-Z]{2,63}(?:\.[a-zA-Z]{2,63})?)\b'
-    domains = re.findall(domain_pattern, text, re.IGNORECASE)
-    
-    # Combine and remove duplicates
-    all_domains = list(set(urls + domains))
-    return all_domains
+
+    found = set()
+    for match in _HOST_CANDIDATE_RE.finditer(text):
+        host = _normalize_host(match.group(1))
+        if _is_valid_domain(host):
+            found.add(host)
+    return sorted(found)
 
 def check_domain_age(domain: str) -> Tuple[Optional[int], Optional[str]]:
     """
