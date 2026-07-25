@@ -22,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 from   apscheduler.schedulers.background \
                                 import BackgroundScheduler
-from   crypto_utils             import (decrypt_secret, encrypt_secret)
+from   crypto_utils             import decrypt_secret, encrypt_secret
 from   email_scanner            import scan_emails_with_model
+from   errors                   import ApiError, ErrorCode, error_response
 from   filelock                 import FileLock, Timeout
 from   gmail_connector          import (fetch_gmail_emails, get_gmail_auth_url,
                                         get_gmail_tokens, refresh_gmail_token)
@@ -134,14 +135,12 @@ def validate_internal_request(f):
             app.logger.warning(
                 f"⚠️  Unauthorized internal request from {request.remote_addr}"
             )
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "Forbidden: requests must originate from the trusted backend",
-                    }
-                ),
+            return error_response(
+                ErrorCode.FORBIDDEN,
+                "Forbidden: requests must originate from the trusted backend",
                 403,
+                request_id=getattr(g, "request_id", "unknown"),
+                extra={"success": False},
             )
 
         # Log internal request
@@ -168,14 +167,12 @@ def require_internal_secret():
         return None
     provided = request.headers.get("X-Internal-Secret", "")
     if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Forbidden: requests must originate from the trusted backend",
-                }
-            ),
+        return error_response(
+            ErrorCode.FORBIDDEN,
+            "Forbidden: requests must originate from the trusted backend",
             403,
+            request_id=getattr(g, "request_id", "unknown"),
+            extra={"success": False},
         )
 
 
@@ -301,6 +298,45 @@ def audit_log(action, resource_type):
 # ============================================
 
 
+def _current_request_id():
+    return getattr(g, "request_id", "unknown")
+
+
+@app.errorhandler(ApiError)
+def handle_api_error(e):
+    """Render a raised ApiError through the shared error envelope (#986)."""
+    return error_response(e.code, e.message, e.status, request_id=_current_request_id())
+
+
+@app.errorhandler(400)
+def handle_bad_request(e):
+    message = getattr(e, "description", None) or "Bad request"
+    return error_response(
+        ErrorCode.BAD_REQUEST, message, 400, request_id=_current_request_id()
+    )
+
+
+@app.errorhandler(403)
+def handle_forbidden(e):
+    message = getattr(e, "description", None) or "Forbidden"
+    # success:false is part of the zero-trust JSON shape existing callers read.
+    return error_response(
+        ErrorCode.FORBIDDEN,
+        message,
+        403,
+        request_id=_current_request_id(),
+        extra={"success": False},
+    )
+
+
+@app.errorhandler(404)
+def handle_not_found(e):
+    message = getattr(e, "description", None) or "Not found"
+    return error_response(
+        ErrorCode.NOT_FOUND, message, 404, request_id=_current_request_id()
+    )
+
+
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def handle_internal_error(e):
@@ -308,9 +344,17 @@ def handle_internal_error(e):
 
     if isinstance(e, HTTPException):
         return e
-    request_id = getattr(g, "request_id", "unknown")
+    request_id = _current_request_id()
     app.logger.exception(f"❌ [Request-ID: {request_id}] Unhandled exception")
-    return jsonify({"error": "Internal server error", "request_id": request_id}), 500
+    # Keep the legacy top-level request_id alongside the new envelope so clients
+    # that already read it keep working.
+    return error_response(
+        ErrorCode.INTERNAL_ERROR,
+        "Internal server error",
+        500,
+        request_id=request_id,
+        extra={"request_id": request_id},
+    )
 
 
 # ============================================
@@ -723,25 +767,25 @@ def predict():
                 try:
                     json.loads(raw_body)
                 except ValueError:
-                    return (
-                        jsonify({"error": "Request body must be a valid JSON object"}),
+                    return error_response(
+                        ErrorCode.INVALID_JSON_BODY,
+                        "Request body must be a valid JSON object",
                         400,
+                        request_id=_current_request_id(),
                     )
-                return (
-                    jsonify(
-                        {"error": "Request body must be a JSON object, got NoneType"}
-                    ),
+                return error_response(
+                    ErrorCode.INVALID_JSON_BODY,
+                    "Request body must be a JSON object, got NoneType",
                     400,
+                    request_id=_current_request_id(),
                 )
             data = {}
         elif not isinstance(data, dict):
-            return (
-                jsonify(
-                    {
-                        "error": f"Request body must be a JSON object, got {type(data).__name__}"
-                    }
-                ),
+            return error_response(
+                ErrorCode.INVALID_JSON_BODY,
+                f"Request body must be a JSON object, got {type(data).__name__}",
                 400,
+                request_id=_current_request_id(),
             )
 
         text = data.get("text")
@@ -752,28 +796,31 @@ def predict():
                 f.write(
                     f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n"
                 )
-            return jsonify({"error": "No text provided"}), 400
+            return error_response(
+                ErrorCode.NO_TEXT_PROVIDED,
+                "No text provided",
+                400,
+                request_id=_current_request_id(),
+            )
 
         if not isinstance(text, str):
-            return (
-                jsonify(
-                    {"error": f"'text' must be a string, got {type(text).__name__}"}
-                ),
+            return error_response(
+                ErrorCode.INVALID_TEXT_TYPE,
+                f"'text' must be a string, got {type(text).__name__}",
                 400,
+                request_id=_current_request_id(),
             )
 
         # Maximum-length validation before any vectorization/inference work.
         if len(text) > MAX_MESSAGE_LENGTH:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
-                            f"characters (got {len(text)})"
-                        )
-                    }
+            return error_response(
+                ErrorCode.TEXT_TOO_LONG,
+                (
+                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
+                    f"characters (got {len(text)})"
                 ),
                 400,
+                request_id=_current_request_id(),
             )
 
         original_text = text
@@ -909,7 +956,16 @@ def predict():
             from datetime import datetime
 
             f.write(f"{datetime.now()} - [Request-ID: {request_id}] ERROR: {str(e)}\n")
-        return jsonify({"error": str(e), "request_id": request_id}), 500
+        # Don't leak the raw exception string to the client; log it above and
+        # return the standard envelope. request_id is also kept top-level for
+        # backward compatibility with the previous 500 shape.
+        return error_response(
+            ErrorCode.INTERNAL_ERROR,
+            "Internal server error",
+            500,
+            request_id=request_id,
+            extra={"request_id": request_id},
+        )
 
 
 # ============================================
@@ -1005,7 +1061,14 @@ def get_wordcloud():
         sample_data = [{"word": w, "count": c} for w, c in SPAM_WORDS.items()]
         return jsonify({"success": True, "data": sample_data, "source": "sample"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Failed to build word cloud data: {e}")
+        return error_response(
+            ErrorCode.WORDCLOUD_FAILED,
+            "Failed to build word cloud data.",
+            500,
+            request_id=_current_request_id(),
+            extra={"success": False},
+        )
 
 
 @app.route("/api/word-of-the-day", methods=["GET"])
@@ -1017,7 +1080,14 @@ def get_word_of_the_day():
         word_data = get_word_of_the_day_data()
         return jsonify({"success": True, "data": word_data})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Failed to build word of the day: {e}")
+        return error_response(
+            ErrorCode.WORD_OF_DAY_FAILED,
+            "Failed to build word of the day.",
+            500,
+            request_id=_current_request_id(),
+            extra={"success": False},
+        )
 
 
 @app.route("/importance", methods=["GET"])
@@ -1032,7 +1102,12 @@ def get_feature_importance():
         return jsonify({"top_features": top_features})
     except Exception as e:
         app.logger.error(f"Failed to compute feature importance: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response(
+            ErrorCode.IMPORTANCE_FAILED,
+            "Failed to compute feature importance.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 @app.route("/feedback", methods=["POST"])
@@ -1045,7 +1120,12 @@ def feedback():
     correct_label = str(data.get("correct_label", "")).strip()
 
     if not text or correct_label not in FEEDBACK_LABELS:
-        return jsonify({"error": "Invalid feedback data"}), 400
+        return error_response(
+            ErrorCode.INVALID_FEEDBACK,
+            "Invalid feedback data",
+            400,
+            request_id=_current_request_id(),
+        )
 
     lock_path = str(FEEDBACK_FILE) + ".lock"
 
@@ -1071,17 +1151,20 @@ def feedback():
 
         return jsonify({"message": "Feedback recorded. Thank you!"}), 201
     except Timeout:
-        return (
-            jsonify(
-                {
-                    "error": "Could not acquire lock on feedback file, please try again later."
-                }
-            ),
+        return error_response(
+            ErrorCode.FEEDBACK_LOCKED,
+            "Could not acquire lock on feedback file, please try again later.",
             503,
+            request_id=_current_request_id(),
         )
     except Exception as e:
         app.logger.error(f"Failed to write feedback: {e}")
-        return jsonify({"error": "Failed to record feedback."}), 500
+        return error_response(
+            ErrorCode.FEEDBACK_WRITE_FAILED,
+            "Failed to record feedback.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 @app.route("/feedback/stats", methods=["GET"])
@@ -1110,7 +1193,12 @@ def feedback_stats():
                 rows.append(row)
     except Exception as e:
         app.logger.error(f"Failed to read feedback stats: {e}")
-        return jsonify({"error": "Failed to read feedback data."}), 500
+        return error_response(
+            ErrorCode.FEEDBACK_READ_FAILED,
+            "Failed to read feedback data.",
+            500,
+            request_id=_current_request_id(),
+        )
 
     total = len(rows)
     corrections = 0
@@ -1178,15 +1266,22 @@ def analyze_email_header():
                     except UnicodeDecodeError:
                         headers = raw_bytes.decode("latin-1", errors="replace")
                 except Exception as e:
-                    return jsonify({"error": f"Failed to read EML file: {str(e)}"}), 400
+                    app.logger.error(f"Failed to read EML file: {e}")
+                    raise ApiError(
+                        ErrorCode.HEADER_READ_FAILED, "Failed to read EML file", 400
+                    ) from e
             else:
-                return jsonify({"error": "No email headers provided"}), 400
+                raise ApiError(
+                    ErrorCode.NO_HEADERS_PROVIDED, "No email headers provided", 400
+                )
         else:
             data = request.get_json(silent=True) or {}
             headers = data.get("headers", "")
 
         if not headers or not isinstance(headers, str) or not headers.strip():
-            return jsonify({"error": "No email headers provided"}), 400
+            raise ApiError(
+                ErrorCode.NO_HEADERS_PROVIDED, "No email headers provided", 400
+            )
 
         analysis = analyze_headers(headers)
         return jsonify(
@@ -1199,8 +1294,15 @@ def analyze_email_header():
                 "analysis": analysis,
             }
         )
+    except ApiError:
+        # Typed validation errors raised above must reach the ApiError handler
+        # unchanged rather than being flattened into a generic 500.
+        raise
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Email header analysis failed: {e}")
+        raise ApiError(
+            ErrorCode.HEADER_ANALYSIS_FAILED, "Failed to analyze email headers", 500
+        ) from e
 
 
 @app.route("/spam-insights", methods=["GET"])
@@ -1214,7 +1316,13 @@ def get_insights():
         insights = get_spam_insights(limit=limit, category=category)
         return jsonify(insights)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Failed to compute spam insights: {e}")
+        return error_response(
+            ErrorCode.INSIGHTS_FAILED,
+            "Failed to compute spam insights.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 # ============================================
@@ -1241,15 +1349,24 @@ def gmail_callback():
     )
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     if not code:
-        return jsonify({"error": "Authorization code is missing"}), 400
+        raise ApiError(
+            ErrorCode.MISSING_AUTH_CODE, "Authorization code is missing", 400
+        )
     try:
         tokens = get_gmail_tokens(code, redirect_uri)
         oauth_store.save_oauth_tokens(username, "gmail", tokens)
         return jsonify({"message": "Gmail connected successfully"})
     except Exception as e:
-        return jsonify({"error": f"Failed to exchange Google code: {str(e)}"}), 500
+        app.logger.error(f"Failed to exchange Google code: {e}")
+        raise ApiError(
+            ErrorCode.OAUTH_EXCHANGE_FAILED,
+            "Failed to exchange Google authorization code",
+            500,
+        ) from e
 
 
 @app.route("/gmail/emails", methods=["GET"])
@@ -1259,12 +1376,16 @@ def gmail_callback():
 def gmail_emails():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
 
     user_tokens = oauth_store.get_oauth_tokens(username, "gmail")
 
     if not user_tokens:
-        return jsonify({"error": "Gmail account not connected"}), 401
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED, "Gmail account not connected", 401
+        )
     try:
         try:
             emails = fetch_gmail_emails(user_tokens.get("access_token"), limit=50)
@@ -1281,7 +1402,10 @@ def gmail_emails():
                 raise err
         return jsonify({"emails": emails})
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch Gmail emails: {str(e)}"}), 500
+        app.logger.error(f"Failed to fetch Gmail emails: {e}")
+        raise ApiError(
+            ErrorCode.UPSTREAM_FETCH_FAILED, "Failed to fetch Gmail emails", 500
+        ) from e
 
 
 # ============================================
@@ -1308,15 +1432,24 @@ def outlook_callback():
     )
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     if not code:
-        return jsonify({"error": "Authorization code is missing"}), 400
+        raise ApiError(
+            ErrorCode.MISSING_AUTH_CODE, "Authorization code is missing", 400
+        )
     try:
         tokens = get_outlook_tokens(code, redirect_uri)
         oauth_store.save_oauth_tokens(username, "outlook", tokens)
         return jsonify({"message": "Outlook connected successfully"})
     except Exception as e:
-        return jsonify({"error": f"Failed to exchange Outlook code: {str(e)}"}), 500
+        app.logger.error(f"Failed to exchange Outlook code: {e}")
+        raise ApiError(
+            ErrorCode.OAUTH_EXCHANGE_FAILED,
+            "Failed to exchange Outlook authorization code",
+            500,
+        ) from e
 
 
 @app.route("/outlook/emails", methods=["GET"])
@@ -1325,11 +1458,15 @@ def outlook_callback():
 def outlook_emails():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     user_tokens = oauth_store.get_oauth_tokens(username, "outlook")
 
     if not user_tokens:
-        return jsonify({"error": "Outlook account not connected"}), 401
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED, "Outlook account not connected", 401
+        )
 
     try:
         try:
@@ -1347,7 +1484,10 @@ def outlook_emails():
                 raise err
         return jsonify({"emails": emails})
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch Outlook emails: {str(e)}"}), 500
+        app.logger.error(f"Failed to fetch Outlook emails: {e}")
+        raise ApiError(
+            ErrorCode.UPSTREAM_FETCH_FAILED, "Failed to fetch Outlook emails", 500
+        ) from e
 
 
 @app.route("/scan-emails", methods=["POST"])
@@ -1358,18 +1498,22 @@ def scan_emails_route():
     provider = data.get("provider", "").lower()
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
 
     if provider not in ("gmail", "outlook"):
-        return (
-            jsonify({"error": "Invalid provider. Must be 'gmail' or 'outlook'."}),
+        raise ApiError(
+            ErrorCode.INVALID_PROVIDER,
+            "Invalid provider. Must be 'gmail' or 'outlook'.",
             400,
         )
 
     user_tokens = oauth_store.get_oauth_tokens(username, provider)
     if not user_tokens:
-        return (
-            jsonify({"error": f"{provider.capitalize()} account not connected."}),
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED,
+            f"{provider.capitalize()} account not connected.",
             401,
         )
 
@@ -1410,7 +1554,10 @@ def scan_emails_route():
         scan_results = scan_emails_with_model(emails)
         return jsonify(scan_results)
     except Exception as e:
-        return jsonify({"error": f"Email scan execution failed: {str(e)}"}), 500
+        app.logger.error(f"Email scan execution failed: {e}")
+        raise ApiError(
+            ErrorCode.EMAIL_SCAN_FAILED, "Email scan execution failed", 500
+        ) from e
 
 
 # ============================================
@@ -1542,7 +1689,9 @@ def _require_username():
 def imap_connect():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     data = request.get_json(silent=True) or {}
 
     host = data.get("host", "").strip()
@@ -1553,35 +1702,40 @@ def imap_connect():
     consent = data.get("consent", False)
 
     if not host or not imap_username or not password:
-        return jsonify({"error": "host, imap_username and password are required"}), 400
+        raise ApiError(
+            ErrorCode.INVALID_IMAP_CONFIG,
+            "host, imap_username and password are required",
+            400,
+        )
 
     if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
-        return (
-            jsonify(
-                {
-                    "error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"
-                }
-            ),
+        raise ApiError(
+            ErrorCode.INVALID_SCAN_INTERVAL,
+            f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}",
             400,
         )
 
     if not consent:
-        return (
-            jsonify(
-                {"error": "Explicit consent is required before connecting an inbox"}
-            ),
+        raise ApiError(
+            ErrorCode.CONSENT_REQUIRED,
+            "Explicit consent is required before connecting an inbox",
             400,
         )
 
     try:
         imap_connector.test_imap_connection(host, port, imap_username, password)
     except imap_connector.ImapAuthError as e:
-        return (
-            jsonify({"error": f"Could not authenticate with the IMAP server: {e}"}),
+        raise ApiError(
+            ErrorCode.IMAP_AUTH_FAILED,
+            f"Could not authenticate with the IMAP server: {e}",
             401,
-        )
+        ) from e
     except Exception as e:
-        return jsonify({"error": f"Could not connect to the IMAP server: {e}"}), 502
+        raise ApiError(
+            ErrorCode.IMAP_CONNECT_FAILED,
+            f"Could not connect to the IMAP server: {e}",
+            502,
+        ) from e
 
     encrypted_password = encrypt_secret(password)
     imap_store.save_connection(
