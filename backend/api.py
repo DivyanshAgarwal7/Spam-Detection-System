@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 from   apscheduler.schedulers.background \
                                 import BackgroundScheduler
-from   crypto_utils             import (decrypt_secret, encrypt_secret)
+from   crypto_utils             import decrypt_secret, encrypt_secret
 from   email_scanner            import scan_emails_with_model
 from   filelock                 import FileLock, Timeout
 from   gmail_connector          import (fetch_gmail_emails, get_gmail_auth_url,
@@ -102,8 +102,15 @@ def _load_internal_secret():
 
 INTERNAL_SECRET = _load_internal_secret()
 
-# Paths reachable without the internal secret (liveness/readiness probes)
-PUBLIC_PATHS = {"/", "/health", "/api/roles", "/api/rate-limit-status"}
+# Paths reachable without the internal secret (liveness/readiness probes and
+# the public OpenAPI document).
+PUBLIC_PATHS = {
+    "/",
+    "/health",
+    "/api/roles",
+    "/api/rate-limit-status",
+    "/openapi.json",
+}
 
 
 # ============================================
@@ -649,6 +656,18 @@ def rate_limit_status():
     return jsonify(
         {"success": True, "limits": {"predict": {"window": "1 minute", "max": 50}}}
     )
+
+
+# ============================================
+# API DOCUMENTATION (OpenAPI 3.0)
+# ============================================
+
+
+@app.route("/openapi.json", methods=["GET"])
+@validate_request
+def openapi_json():
+    """Machine-readable OpenAPI 3.0 contract for this service (issue #985)."""
+    return jsonify(build_spec())
 
 
 # ============================================
