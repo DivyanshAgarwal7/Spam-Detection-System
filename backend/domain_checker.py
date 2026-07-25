@@ -1,14 +1,25 @@
 """
 Domain Age & Reputation Checker for Spam Detection
 Extracts domains from text, checks age and blacklist status.
+
+Reputation lookups (WHOIS + DNSBL + threat-intel) are expensive and mostly
+repeat the same handful of domains on the /predict hot path, so
+``analyze_domain`` is fronted by an in-process TTL cache keyed on the domain
+(issue #974). Definitive verdicts are cached longer than transient lookup
+failures, and per-domain locking collapses concurrent duplicate lookups so a
+burst of identical domains triggers a single underlying analysis.
 """
 
 import re
 import os
+import threading
+import time
 import requests
 import whois
 import dns.resolver
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 
@@ -363,20 +374,223 @@ def calculate_risk_score(age_days: Optional[int], blacklist_results: Dict[str, b
     
     return score, recommendation
 
-def analyze_domain(domain: str) -> Dict:
+# ============================================
+# DOMAIN REPUTATION TTL CACHE (issue #974)
+# ============================================
+#
+# Reputation lookups are pure functions of the domain over the cache window, so
+# results are memoised in-process to keep repeated/duplicate domains off the
+# WHOIS/DNSBL/threat-intel network path. This is deliberately an in-process
+# dict-with-locking cache (not Redis): the ML API runs as a single Flask worker,
+# and the goal is to *not repeat* work within a process, not to share state
+# across hosts.
+#
+# TTLs are split so a definitive verdict (real WHOIS age, or a blacklist/threat
+# hit) is trusted for DOMAIN_CACHE_POSITIVE_TTL, while a transient lookup
+# failure (e.g. WHOIS timing out with no reputation signal) is only held for the
+# much shorter DOMAIN_CACHE_NEGATIVE_TTL so a blip is retried soon instead of
+# being frozen in as a fake "unknown" verdict.
+#
+# Environment variables (all optional; resolved live per call so overrides take
+# effect without a reimport, matching rate_limiting.py):
+#   DOMAIN_CACHE_ENABLED       -- "false"/"0"/"no"/"off" disables caching. Default: enabled.
+#   DOMAIN_CACHE_POSITIVE_TTL  -- seconds to cache a definitive verdict. Default: 3600.
+#   DOMAIN_CACHE_NEGATIVE_TTL  -- seconds to cache a transient-failure verdict. Default: 60.
+#   DOMAIN_CACHE_MAX_SIZE      -- max distinct domains held (LRU eviction). Default: 1024.
+
+_DOMAIN_CACHE_POSITIVE_TTL_DEFAULT = 3600
+_DOMAIN_CACHE_NEGATIVE_TTL_DEFAULT = 60
+_DOMAIN_CACHE_MAX_SIZE_DEFAULT = 1024
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    """One memoised domain verdict and when it stops being trusted."""
+
+    value: Dict
+    expires_at: float
+    is_negative: bool
+
+
+# Guards _cache, _domain_locks and _counters. Held only for O(1) bookkeeping,
+# never across an actual lookup, so a slow lookup can't block cache readers.
+_cache_lock = threading.Lock()
+
+# Insertion-ordered so the oldest entry is cheapest to evict; move_to_end on a
+# hit turns it into an LRU.
+_cache: "OrderedDict[str, _CacheEntry]" = OrderedDict()
+
+# Per-domain locks give thundering-herd protection: the first thread to miss a
+# domain computes it while every other thread asking for the same domain waits
+# on this lock and then reuses the freshly cached result.
+_domain_locks: "Dict[str, threading.Lock]" = {}
+
+_counters = {"hits": 0, "misses": 0, "evictions": 0}
+
+
+def _now() -> float:
+    """Monotonic clock for TTLs; indirected so tests can freeze time."""
+    return time.monotonic()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a non-negative int env override, falling back on unset/garbage."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _cache_enabled() -> bool:
+    raw = os.getenv("DOMAIN_CACHE_ENABLED")
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
+def get_cache_stats() -> Dict:
+    """Return domain-cache counters for the analytics dashboard.
+
+    Mirrors the plain-dict stats surface used elsewhere in the backend (e.g.
+    ``evo_mail`` / ``/feedback/stats``). ``hits + misses`` is the total number
+    of ``analyze_domain`` calls that consulted the cache, and ``misses`` equals
+    the number of underlying reputation lookups actually performed.
     """
-    Complete analysis for a single domain.
-    Returns dict with all domain risk information.
+    with _cache_lock:
+        hits = _counters["hits"]
+        misses = _counters["misses"]
+        total = hits + misses
+        return {
+            "hits": hits,
+            "misses": misses,
+            "evictions": _counters["evictions"],
+            "size": len(_cache),
+            "max_size": _env_int(
+                "DOMAIN_CACHE_MAX_SIZE", _DOMAIN_CACHE_MAX_SIZE_DEFAULT
+            ),
+            "hit_rate": (hits / total) if total else 0.0,
+        }
+
+
+def reset_cache_stats() -> None:
+    """Zero the hit/miss/eviction counters without dropping cached entries."""
+    with _cache_lock:
+        _counters["hits"] = 0
+        _counters["misses"] = 0
+        _counters["evictions"] = 0
+
+
+def clear_domain_cache() -> None:
+    """Drop all cached verdicts, per-domain locks and counters.
+
+    Primarily a test seam so cases start from a clean cache; also usable to force
+    a cold re-check operationally.
+    """
+    with _cache_lock:
+        _cache.clear()
+        _domain_locks.clear()
+        _counters["hits"] = 0
+        _counters["misses"] = 0
+        _counters["evictions"] = 0
+
+
+def _get_fresh_locked(domain: str, now: float) -> Optional[_CacheEntry]:
+    """Return a live entry (and mark it MRU), or None. Caller holds _cache_lock."""
+    entry = _cache.get(domain)
+    if entry is not None and entry.expires_at > now:
+        _cache.move_to_end(domain)
+        return entry
+    return None
+
+
+def _store_locked(domain: str, entry: _CacheEntry) -> None:
+    """Insert/refresh an entry, evicting the LRU domain past the size cap.
+
+    Caller holds _cache_lock.
+    """
+    _cache[domain] = entry
+    _cache.move_to_end(domain)
+    max_size = _env_int("DOMAIN_CACHE_MAX_SIZE", _DOMAIN_CACHE_MAX_SIZE_DEFAULT)
+    while max_size >= 1 and len(_cache) > max_size:
+        evicted, _ = _cache.popitem(last=False)
+        _domain_locks.pop(evicted, None)
+        _counters["evictions"] += 1
+
+
+def analyze_domain(domain: str) -> Dict:
+    """Complete risk analysis for a single domain, served from a TTL cache.
+
+    On a hit the cached verdict is returned without touching the network. On a
+    miss the expensive lookup runs under a per-domain lock so concurrent callers
+    asking for the same domain collapse into one underlying analysis (issue
+    #974). A fresh copy of the verdict dict is returned each time so callers
+    can't mutate the cached value.
+    """
+    if not _cache_enabled():
+        return _analyze_domain_uncached(domain)[0]
+
+    now = _now()
+    with _cache_lock:
+        entry = _get_fresh_locked(domain, now)
+        if entry is not None:
+            _counters["hits"] += 1
+            return dict(entry.value)
+        lock = _domain_locks.setdefault(domain, threading.Lock())
+
+    with lock:
+        # Re-check under the per-domain lock: a peer thread may have populated the
+        # cache while we were queued, in which case we reuse it (coalesced hit)
+        # rather than launching a duplicate lookup.
+        now = _now()
+        with _cache_lock:
+            entry = _get_fresh_locked(domain, now)
+            if entry is not None:
+                _counters["hits"] += 1
+                return dict(entry.value)
+            _counters["misses"] += 1
+
+        result, is_transient = _analyze_domain_uncached(domain)
+        ttl = (
+            _env_int("DOMAIN_CACHE_NEGATIVE_TTL", _DOMAIN_CACHE_NEGATIVE_TTL_DEFAULT)
+            if is_transient
+            else _env_int(
+                "DOMAIN_CACHE_POSITIVE_TTL", _DOMAIN_CACHE_POSITIVE_TTL_DEFAULT
+            )
+        )
+        with _cache_lock:
+            _store_locked(
+                domain,
+                _CacheEntry(
+                    value=dict(result),
+                    expires_at=_now() + ttl,
+                    is_negative=is_transient,
+                ),
+            )
+        return dict(result)
+
+
+def _analyze_domain_uncached(domain: str) -> Tuple[Dict, bool]:
+    """Run the raw WHOIS/DNSBL/threat-intel analysis for one domain.
+
+    Returns ``(verdict, is_transient_failure)``. ``is_transient_failure`` is True
+    only when the WHOIS lookup errored AND nothing flagged the domain: there is
+    then no real reputation signal, so the caller caches the result briefly (and
+    does not treat the "unknown" verdict as permanent). A blacklist/threat hit is
+    always a definitive verdict regardless of WHOIS.
     """
     age_days, creation_date = check_domain_age(domain)
     blacklist_results = check_blacklist(domain)
     threat_intel = check_threat_intelligence(domain)
-    
+
     # Merge blacklist results and threat intel results for calculate_risk_score
     all_blacklists = {**blacklist_results, **threat_intel}
-    
+
     risk_score, recommendation = calculate_risk_score(age_days, all_blacklists)
-    
+
     # Determine risk level
     if risk_score >= 70:
         risk_level = "HIGH"
@@ -384,18 +598,30 @@ def analyze_domain(domain: str) -> Dict:
         risk_level = "MEDIUM"
     else:
         risk_level = "LOW"
-    
-    return {
+
+    is_flagged = any(all_blacklists.values())
+    # check_domain_age only reports an actual WHOIS error via this prefix; a
+    # legitimately date-less domain ("No creation date found") is not transient.
+    whois_failed = (
+        age_days is None
+        and isinstance(creation_date, str)
+        and creation_date.startswith("WHOIS lookup failed")
+    )
+    is_transient = whois_failed and not is_flagged
+
+    verdict = {
         "url": domain,
         "age_days": age_days if age_days is not None else "unknown",
         "creation_date": creation_date if creation_date else "unknown",
-        "blacklisted": any(all_blacklists.values()),
+        "blacklisted": is_flagged,
         "blacklist_details": blacklist_results,
         "threat_intel_details": threat_intel,
         "risk_score": risk_score,
         "risk_level": risk_level,
         "recommendation": recommendation,
     }
+    return verdict, is_transient
+
 
 def analyze_text(text: str) -> Dict:
     """
