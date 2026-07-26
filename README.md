@@ -39,6 +39,18 @@ Reactjs: (http://localhost:5173)
 
 
 ---
+## 📄 API Reference
+
+The Flask ML API publishes a machine-readable OpenAPI 3.0 contract, so
+integrators (the Node gateway, browser extension, mobile app) can generate
+typed SDKs or validate requests instead of reading `api.py` by hand.
+
+* **OpenAPI spec:** [`GET /openapi.json`](http://127.0.0.1:5000/openapi.json) —
+  the full OpenAPI 3.0 document (info, servers, the `X-Internal-Secret`
+  security scheme, and every core route's request/response schema). This
+  endpoint is public (no `X-Internal-Secret` required).
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 
@@ -150,14 +162,33 @@ cd backend
 python api.py
 ```
 
-The Flask ML API binds to `127.0.0.1` (localhost only) with the debugger
-disabled by default. These are controlled via environment variables:
+#### Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `FLASK_PORT` | `5000` | Port the API listens on. |
-| `FLASK_HOST` | `127.0.0.1` | Interface to bind. Use `0.0.0.0` to expose on all interfaces **only behind a trusted proxy**. |
-| `FLASK_DEBUG` | `false` | Enables the Werkzeug debugger. Keep off outside local development — it allows remote code execution. |
+The Flask ML API validates its entire configuration once at startup
+(`backend/settings.py`). If anything is misconfigured it **fails fast at boot**
+and reports **every** problem at once in a single error, rather than surfacing
+them one restart at a time. The validated variables:
+
+| Variable | Default | Validation | Purpose |
+| --- | --- | --- | --- |
+| `INTERNAL_SECRET` | — (required) | Present and ≥ 32 characters | Shared secret authenticating requests from the Node/Express backend. No fallback. |
+| `FLASK_HOST` | `127.0.0.1` | — | Interface to bind. Use `0.0.0.0` to expose on all interfaces **only behind a trusted proxy**. |
+| `FLASK_PORT` | `5000` | Integer in `1`–`65535` | Port the API listens on. |
+| `FLASK_DEBUG` | `false` | Refused when `true` on a non-loopback `FLASK_HOST` | Enables the Werkzeug debugger. Keep off outside local development — it allows remote code execution. |
+| `MAX_MESSAGE_LENGTH` | `10000` | Non-negative integer | Maximum accepted `/predict` message length (characters). |
+| `SERVICE_IP_ALLOWLIST` | `127.0.0.1,::1` | — | Comma-separated IPs allowed to reach protected routes (skipped when `NODE_ENV=development`). |
+| `NODE_ENV` | unset | — | `development` relaxes IP allowlisting for local work. |
+| `MODEL_PATH` | `linear_svm_model.pkl` | File must exist and be non-empty | Spam classifier model. |
+| `VECTORIZER_PATH` | `tfidf_vectorizer.pkl` | File must exist and be non-empty | TF-IDF vectorizer for the classifier. |
+| `LABEL_ENCODER_PATH` | `label_encoder.pkl` | File must exist and be non-empty | Label encoder for the classifier. |
+| `URL_MODEL_PATH` | `url_detector.pkl` | File must exist and be non-empty | URL maliciousness model. |
+| `URL_VECTORIZER_PATH` | `url_vectorizer.pkl` | File must exist and be non-empty | Vectorizer for the URL model. |
+
+Relative model paths are resolved against `backend/`. Optional integrations
+(`REDIS_URL` / `RATE_LIMIT_STORAGE_URI` for rate-limit storage,
+`SAFE_BROWSING_API_KEY` / `VIRUSTOTAL_API_KEY` for threat intel) are also exposed
+on the settings object; they are unvalidated because each degrades gracefully
+when unset.
 
 > ⚠️ Never run with `FLASK_DEBUG=true` while bound to a non-loopback host. The
 > app refuses to start for that combination to prevent exposing the interactive
