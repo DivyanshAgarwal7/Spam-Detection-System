@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "email_connectors"))
 
 from   apscheduler.schedulers.background \
                                 import BackgroundScheduler
-from   crypto_utils             import (decrypt_secret, encrypt_secret)
+from   crypto_utils             import decrypt_secret, encrypt_secret
 from   email_scanner            import scan_emails_with_model
 from   filelock                 import FileLock, Timeout
 from   gmail_connector          import (fetch_gmail_emails, get_gmail_auth_url,
@@ -355,6 +355,44 @@ xai_service = XAIService(
 )
 
 
+# ============================================
+# HOT-RELOADABLE SERVING STATE
+# ============================================
+
+# The objects above are what request handlers actually serve. Install them in a
+# shared, thread-safe holder so POST /reload-model can atomically hot-swap in a
+# freshly retrained model without a restart (issue #973); handlers read from
+# serving_state.STATE rather than these module globals so the swap is visible.
+import serving_state
+
+
+def _load_serving_objects():
+    """Reload the serving object set from disk (used by /reload-model)."""
+    fresh_model = joblib.load(MODEL_PATH)
+    fresh_vectorizer = joblib.load(VECTORIZER_PATH)
+    fresh_label_encoder = joblib.load(LABEL_ENCODER_PATH)
+    fresh_xai_service = XAIService(
+        model=fresh_model,
+        vectorizer=fresh_vectorizer,
+        label_encoder=fresh_label_encoder,
+    )
+    return {
+        "model": fresh_model,
+        "vectorizer": fresh_vectorizer,
+        "label_encoder": fresh_label_encoder,
+        "xai_service": fresh_xai_service,
+    }
+
+
+serving_state.init_state(
+    model=model,
+    vectorizer=vectorizer,
+    label_encoder=label_encoder,
+    xai_service=xai_service,
+    loader=_load_serving_objects,
+)
+
+
 # SQLite Persistent Storage for spam words
 from   datetime                 import datetime, timezone
 
@@ -507,12 +545,20 @@ from   bulk_predict             import bulk_predict_bp
 app.register_blueprint(bulk_predict_bp)
 app.register_blueprint(analytics_bp)
 
+from   routes.reload            import register_reload_endpoint
+
+register_reload_endpoint(app)
+
 url_model = joblib.load(URL_MODEL_PATH)
 url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
-# url_detector.pkl predicts numeric classes with no bundled label encoder. The
-# model was trained with benign -> Safe (0) and phishing/malware/defacement ->
-# Malicious (1) (see the "Url Model" dataset-labels table in the README), so 0
-# must map to "safe" and 1 to "malicious".
+URL_LABELS = {0: "malicious", 1: "safe"}
+# url_detector.pkl predicts numeric classes with no bundled label encoder
+URL_LABELS = {0: "safe", 1: "malicious"}
+
+
+URL_LABELS = {0: "malicious", 1: "safe"}
+
+# url_detector.pkl predicts numeric classes with no bundled label encoder
 URL_LABELS = {0: "safe", 1: "malicious"}
 
 
@@ -762,6 +808,12 @@ def predict():
                 400,
             )
 
+        # Read the live serving objects through the shared state so a
+        # POST /reload-model hot-swap is picked up here without a restart
+        # (#973). One snapshot per request keeps the model, vectorizer and
+        # label encoder mutually consistent even if a reload lands mid-request.
+        serving = serving_state.STATE.snapshot()
+
         # Maximum-length validation before any vectorization/inference work.
         if len(text) > MAX_MESSAGE_LENGTH:
             return (
@@ -814,14 +866,14 @@ def predict():
             if final_output == "safe" and heuristic_url_is_malicious(text):
                 final_output = "malicious"
         else:
-            text_vector = vectorizer.transform([text])
-            prediction = model.predict(text_vector)
-            final_output = str(label_encoder.inverse_transform(prediction)[0])
+            text_vector = serving.vectorizer.transform([text])
+            prediction = serving.model.predict(text_vector)
+            final_output = serving.label_encoder.inverse_transform(prediction)[0]
 
         confidence_score = 95.0
         decision_score = None
         try:
-            active_model = url_model if input_type == "url" else model
+            active_model = url_model if input_type == "url" else serving.model
             if hasattr(active_model, "predict_proba"):
                 proba = active_model.predict_proba(text_vector)
                 confidence_score = round(float(max(proba[0])) * 100, 2)
@@ -1027,7 +1079,7 @@ def get_feature_importance():
     try:
         top_features = [
             {"feature": word, "importance": score}
-            for word, score in xai_service.get_global_importance()
+            for word, score in serving_state.STATE.snapshot().xai_service.get_global_importance()
         ]
         return jsonify({"top_features": top_features})
     except Exception as e:
