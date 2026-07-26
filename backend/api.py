@@ -24,6 +24,7 @@ from   apscheduler.schedulers.background \
                                 import BackgroundScheduler
 from   crypto_utils             import decrypt_secret, encrypt_secret
 from   email_scanner            import scan_emails_with_model
+from   errors                   import ApiError, ErrorCode, error_response
 from   filelock                 import FileLock, Timeout
 from   gmail_connector          import (fetch_gmail_emails, get_gmail_auth_url,
                                         get_gmail_tokens, refresh_gmail_token)
@@ -62,6 +63,13 @@ except ImportError:
 
 load_dotenv()
 
+# Validate the entire ML API configuration once, up front. load_settings()
+# aggregates every problem (missing/short INTERNAL_SECRET, bad port, unusable
+# model files, an unsafe FLASK_DEBUG/host combination, ...) into a single
+# ConfigError, so a misconfigured deployment fails fast at boot instead of on
+# the first request. See settings.py.
+settings = load_settings()
+
 app = Flask(__name__)
 
 xai_engine = ExplanationEngine()
@@ -78,29 +86,10 @@ configure_rate_limiting(app)
 # ZERO TRUST - INTERNAL SECRET
 # ============================================
 
-# Shared secret that the trusted Node/Express backend attaches to every request.
-# This is mandatory configuration: there is intentionally NO hardcoded fallback.
-INTERNAL_SECRET_MIN_LENGTH = 32
-
-
-def _load_internal_secret():
-    secret = os.getenv("INTERNAL_SECRET")
-    if not secret:
-        raise RuntimeError(
-            "INTERNAL_SECRET is not set. This shared secret authenticates "
-            "requests from the Node/Express backend and is mandatory. Generate "
-            'one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` '
-            "and set it (identically) for both the Node and Flask services."
-        )
-    if len(secret) < INTERNAL_SECRET_MIN_LENGTH:
-        raise RuntimeError(
-            f"INTERNAL_SECRET is too short ({len(secret)} characters); it must "
-            f"be at least {INTERNAL_SECRET_MIN_LENGTH} characters."
-        )
-    return secret
-
-
-INTERNAL_SECRET = _load_internal_secret()
+# Shared secret the trusted Node/Express backend attaches to every request.
+# Presence and minimum length are validated by load_settings(); this alias is
+# what the request gates below compare against.
+INTERNAL_SECRET = settings.internal_secret
 
 # Paths reachable without the internal secret (liveness/readiness probes and
 # the public API documentation surface).
@@ -142,14 +131,12 @@ def validate_internal_request(f):
             app.logger.warning(
                 f"⚠️  Unauthorized internal request from {request.remote_addr}"
             )
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "Forbidden: requests must originate from the trusted backend",
-                    }
-                ),
+            return error_response(
+                ErrorCode.FORBIDDEN,
+                "Forbidden: requests must originate from the trusted backend",
                 403,
+                request_id=getattr(g, "request_id", "unknown"),
+                extra={"success": False},
             )
 
         # Log internal request
@@ -176,14 +163,12 @@ def require_internal_secret():
         return None
     provided = request.headers.get("X-Internal-Secret", "")
     if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Forbidden: requests must originate from the trusted backend",
-                }
-            ),
+        return error_response(
+            ErrorCode.FORBIDDEN,
+            "Forbidden: requests must originate from the trusted backend",
             403,
+            request_id=getattr(g, "request_id", "unknown"),
+            extra={"success": False},
         )
 
 
@@ -198,11 +183,10 @@ def ip_allowlist(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Skip in development
-        if os.getenv("NODE_ENV") == "development":
+        if settings.node_env == "development":
             return f(*args, **kwargs)
 
-        allowed_ips = os.getenv("SERVICE_IP_ALLOWLIST", "127.0.0.1,::1")
-        allowed_list = [ip.strip() for ip in allowed_ips.split(",")]
+        allowed_list = settings.service_ip_allowlist
 
         client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
         # Get first IP if multiple
@@ -309,6 +293,45 @@ def audit_log(action, resource_type):
 # ============================================
 
 
+def _current_request_id():
+    return getattr(g, "request_id", "unknown")
+
+
+@app.errorhandler(ApiError)
+def handle_api_error(e):
+    """Render a raised ApiError through the shared error envelope (#986)."""
+    return error_response(e.code, e.message, e.status, request_id=_current_request_id())
+
+
+@app.errorhandler(400)
+def handle_bad_request(e):
+    message = getattr(e, "description", None) or "Bad request"
+    return error_response(
+        ErrorCode.BAD_REQUEST, message, 400, request_id=_current_request_id()
+    )
+
+
+@app.errorhandler(403)
+def handle_forbidden(e):
+    message = getattr(e, "description", None) or "Forbidden"
+    # success:false is part of the zero-trust JSON shape existing callers read.
+    return error_response(
+        ErrorCode.FORBIDDEN,
+        message,
+        403,
+        request_id=_current_request_id(),
+        extra={"success": False},
+    )
+
+
+@app.errorhandler(404)
+def handle_not_found(e):
+    message = getattr(e, "description", None) or "Not found"
+    return error_response(
+        ErrorCode.NOT_FOUND, message, 404, request_id=_current_request_id()
+    )
+
+
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def handle_internal_error(e):
@@ -316,9 +339,17 @@ def handle_internal_error(e):
 
     if isinstance(e, HTTPException):
         return e
-    request_id = getattr(g, "request_id", "unknown")
+    request_id = _current_request_id()
     app.logger.exception(f"❌ [Request-ID: {request_id}] Unhandled exception")
-    return jsonify({"error": "Internal server error", "request_id": request_id}), 500
+    # Keep the legacy top-level request_id alongside the new envelope so clients
+    # that already read it keep working.
+    return error_response(
+        ErrorCode.INTERNAL_ERROR,
+        "Internal server error",
+        500,
+        request_id=request_id,
+        extra={"request_id": request_id},
+    )
 
 
 # ============================================
@@ -327,30 +358,13 @@ def handle_internal_error(e):
 
 BASE_DIR = Path(__file__).resolve().parent
 
-
-def resolve_path(env_var, default_filename):
-    val = os.getenv(env_var)
-    if val:
-        p = Path(val)
-        if p.is_absolute():
-            return val
-        if p.exists() and p.stat().st_size > 0:
-            return val
-        p_base = BASE_DIR / p
-        if p_base.exists() and p_base.stat().st_size > 0:
-            return str(p_base)
-        p_name = BASE_DIR / p.name
-        if p_name.exists() and p_name.stat().st_size > 0:
-            return str(p_name)
-        return val
-    return str(BASE_DIR / default_filename)
-
-
-MODEL_PATH = resolve_path("MODEL_PATH", "linear_svm_model.pkl")
-VECTORIZER_PATH = resolve_path("VECTORIZER_PATH", "tfidf_vectorizer.pkl")
-LABEL_ENCODER_PATH = resolve_path("LABEL_ENCODER_PATH", "label_encoder.pkl")
-URL_MODEL_PATH = resolve_path("URL_MODEL_PATH", "url_detector.pkl")
-URL_VECTORIZER_PATH = resolve_path("URL_VECTORIZER_PATH", "url_vectorizer.pkl")
+# Resolved and existence-checked by load_settings(); aliased here so the rest of
+# the module keeps its familiar names.
+MODEL_PATH = settings.model_path
+VECTORIZER_PATH = settings.vectorizer_path
+LABEL_ENCODER_PATH = settings.label_encoder_path
+URL_MODEL_PATH = settings.url_model_path
+URL_VECTORIZER_PATH = settings.url_vectorizer_path
 
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
@@ -360,6 +374,44 @@ from   xai_service              import XAIService
 
 xai_service = XAIService(
     model=model, vectorizer=vectorizer, label_encoder=label_encoder
+)
+
+
+# ============================================
+# HOT-RELOADABLE SERVING STATE
+# ============================================
+
+# The objects above are what request handlers actually serve. Install them in a
+# shared, thread-safe holder so POST /reload-model can atomically hot-swap in a
+# freshly retrained model without a restart (issue #973); handlers read from
+# serving_state.STATE rather than these module globals so the swap is visible.
+import serving_state
+
+
+def _load_serving_objects():
+    """Reload the serving object set from disk (used by /reload-model)."""
+    fresh_model = joblib.load(MODEL_PATH)
+    fresh_vectorizer = joblib.load(VECTORIZER_PATH)
+    fresh_label_encoder = joblib.load(LABEL_ENCODER_PATH)
+    fresh_xai_service = XAIService(
+        model=fresh_model,
+        vectorizer=fresh_vectorizer,
+        label_encoder=fresh_label_encoder,
+    )
+    return {
+        "model": fresh_model,
+        "vectorizer": fresh_vectorizer,
+        "label_encoder": fresh_label_encoder,
+        "xai_service": fresh_xai_service,
+    }
+
+
+serving_state.init_state(
+    model=model,
+    vectorizer=vectorizer,
+    label_encoder=label_encoder,
+    xai_service=xai_service,
+    loader=_load_serving_objects,
 )
 
 
@@ -515,12 +567,20 @@ from   bulk_predict             import bulk_predict_bp
 app.register_blueprint(bulk_predict_bp)
 app.register_blueprint(analytics_bp)
 
+from   routes.reload            import register_reload_endpoint
+
+register_reload_endpoint(app)
+
 url_model = joblib.load(URL_MODEL_PATH)
 url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
-# url_detector.pkl predicts numeric classes with no bundled label encoder. The
-# model was trained with benign -> Safe (0) and phishing/malware/defacement ->
-# Malicious (1) (see the "Url Model" dataset-labels table in the README), so 0
-# must map to "safe" and 1 to "malicious".
+URL_LABELS = {0: "malicious", 1: "safe"}
+# url_detector.pkl predicts numeric classes with no bundled label encoder
+URL_LABELS = {0: "safe", 1: "malicious"}
+
+
+URL_LABELS = {0: "malicious", 1: "safe"}
+
+# url_detector.pkl predicts numeric classes with no bundled label encoder
 URL_LABELS = {0: "safe", 1: "malicious"}
 
 
@@ -559,7 +619,7 @@ def heuristic_url_is_malicious(url):
     return tld in SUSPICIOUS_TLDS
 
 
-MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 10000))
+MAX_MESSAGE_LENGTH = settings.max_message_length
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -777,25 +837,25 @@ def predict():
                 try:
                     json.loads(raw_body)
                 except ValueError:
-                    return (
-                        jsonify({"error": "Request body must be a valid JSON object"}),
+                    return error_response(
+                        ErrorCode.INVALID_JSON_BODY,
+                        "Request body must be a valid JSON object",
                         400,
+                        request_id=_current_request_id(),
                     )
-                return (
-                    jsonify(
-                        {"error": "Request body must be a JSON object, got NoneType"}
-                    ),
+                return error_response(
+                    ErrorCode.INVALID_JSON_BODY,
+                    "Request body must be a JSON object, got NoneType",
                     400,
+                    request_id=_current_request_id(),
                 )
             data = {}
         elif not isinstance(data, dict):
-            return (
-                jsonify(
-                    {
-                        "error": f"Request body must be a JSON object, got {type(data).__name__}"
-                    }
-                ),
+            return error_response(
+                ErrorCode.INVALID_JSON_BODY,
+                f"Request body must be a JSON object, got {type(data).__name__}",
                 400,
+                request_id=_current_request_id(),
             )
 
         text = data.get("text")
@@ -806,28 +866,37 @@ def predict():
                 f.write(
                     f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n"
                 )
-            return jsonify({"error": "No text provided"}), 400
+            return error_response(
+                ErrorCode.NO_TEXT_PROVIDED,
+                "No text provided",
+                400,
+                request_id=_current_request_id(),
+            )
 
         if not isinstance(text, str):
-            return (
-                jsonify(
-                    {"error": f"'text' must be a string, got {type(text).__name__}"}
-                ),
+            return error_response(
+                ErrorCode.INVALID_TEXT_TYPE,
+                f"'text' must be a string, got {type(text).__name__}",
                 400,
+                request_id=_current_request_id(),
             )
+
+        # Read the live serving objects through the shared state so a
+        # POST /reload-model hot-swap is picked up here without a restart
+        # (#973). One snapshot per request keeps the model, vectorizer and
+        # label encoder mutually consistent even if a reload lands mid-request.
+        serving = serving_state.STATE.snapshot()
 
         # Maximum-length validation before any vectorization/inference work.
         if len(text) > MAX_MESSAGE_LENGTH:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
-                            f"characters (got {len(text)})"
-                        )
-                    }
+            return error_response(
+                ErrorCode.TEXT_TOO_LONG,
+                (
+                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
+                    f"characters (got {len(text)})"
                 ),
                 400,
+                request_id=_current_request_id(),
             )
 
         original_text = text
@@ -868,14 +937,14 @@ def predict():
             if final_output == "safe" and heuristic_url_is_malicious(text):
                 final_output = "malicious"
         else:
-            text_vector = vectorizer.transform([text])
-            prediction = model.predict(text_vector)
-            final_output = str(label_encoder.inverse_transform(prediction)[0])
+            text_vector = serving.vectorizer.transform([text])
+            prediction = serving.model.predict(text_vector)
+            final_output = serving.label_encoder.inverse_transform(prediction)[0]
 
         confidence_score = 95.0
         decision_score = None
         try:
-            active_model = url_model if input_type == "url" else model
+            active_model = url_model if input_type == "url" else serving.model
             if hasattr(active_model, "predict_proba"):
                 proba = active_model.predict_proba(text_vector)
                 confidence_score = round(float(max(proba[0])) * 100, 2)
@@ -963,7 +1032,16 @@ def predict():
             from datetime import datetime
 
             f.write(f"{datetime.now()} - [Request-ID: {request_id}] ERROR: {str(e)}\n")
-        return jsonify({"error": str(e), "request_id": request_id}), 500
+        # Don't leak the raw exception string to the client; log it above and
+        # return the standard envelope. request_id is also kept top-level for
+        # backward compatibility with the previous 500 shape.
+        return error_response(
+            ErrorCode.INTERNAL_ERROR,
+            "Internal server error",
+            500,
+            request_id=request_id,
+            extra={"request_id": request_id},
+        )
 
 
 # ============================================
@@ -1059,7 +1137,14 @@ def get_wordcloud():
         sample_data = [{"word": w, "count": c} for w, c in SPAM_WORDS.items()]
         return jsonify({"success": True, "data": sample_data, "source": "sample"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Failed to build word cloud data: {e}")
+        return error_response(
+            ErrorCode.WORDCLOUD_FAILED,
+            "Failed to build word cloud data.",
+            500,
+            request_id=_current_request_id(),
+            extra={"success": False},
+        )
 
 
 @app.route("/api/word-of-the-day", methods=["GET"])
@@ -1071,7 +1156,14 @@ def get_word_of_the_day():
         word_data = get_word_of_the_day_data()
         return jsonify({"success": True, "data": word_data})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Failed to build word of the day: {e}")
+        return error_response(
+            ErrorCode.WORD_OF_DAY_FAILED,
+            "Failed to build word of the day.",
+            500,
+            request_id=_current_request_id(),
+            extra={"success": False},
+        )
 
 
 @app.route("/importance", methods=["GET"])
@@ -1081,12 +1173,17 @@ def get_feature_importance():
     try:
         top_features = [
             {"feature": word, "importance": score}
-            for word, score in xai_service.get_global_importance()
+            for word, score in serving_state.STATE.snapshot().xai_service.get_global_importance()
         ]
         return jsonify({"top_features": top_features})
     except Exception as e:
         app.logger.error(f"Failed to compute feature importance: {e}")
-        return jsonify({"error": str(e)}), 500
+        return error_response(
+            ErrorCode.IMPORTANCE_FAILED,
+            "Failed to compute feature importance.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 @app.route("/feedback", methods=["POST"])
@@ -1099,7 +1196,12 @@ def feedback():
     correct_label = str(data.get("correct_label", "")).strip()
 
     if not text or correct_label not in FEEDBACK_LABELS:
-        return jsonify({"error": "Invalid feedback data"}), 400
+        return error_response(
+            ErrorCode.INVALID_FEEDBACK,
+            "Invalid feedback data",
+            400,
+            request_id=_current_request_id(),
+        )
 
     lock_path = str(FEEDBACK_FILE) + ".lock"
 
@@ -1125,17 +1227,20 @@ def feedback():
 
         return jsonify({"message": "Feedback recorded. Thank you!"}), 201
     except Timeout:
-        return (
-            jsonify(
-                {
-                    "error": "Could not acquire lock on feedback file, please try again later."
-                }
-            ),
+        return error_response(
+            ErrorCode.FEEDBACK_LOCKED,
+            "Could not acquire lock on feedback file, please try again later.",
             503,
+            request_id=_current_request_id(),
         )
     except Exception as e:
         app.logger.error(f"Failed to write feedback: {e}")
-        return jsonify({"error": "Failed to record feedback."}), 500
+        return error_response(
+            ErrorCode.FEEDBACK_WRITE_FAILED,
+            "Failed to record feedback.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 @app.route("/feedback/stats", methods=["GET"])
@@ -1164,7 +1269,12 @@ def feedback_stats():
                 rows.append(row)
     except Exception as e:
         app.logger.error(f"Failed to read feedback stats: {e}")
-        return jsonify({"error": "Failed to read feedback data."}), 500
+        return error_response(
+            ErrorCode.FEEDBACK_READ_FAILED,
+            "Failed to read feedback data.",
+            500,
+            request_id=_current_request_id(),
+        )
 
     total = len(rows)
     corrections = 0
@@ -1268,7 +1378,13 @@ def get_insights():
         insights = get_spam_insights(limit=limit, category=category)
         return jsonify(insights)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Failed to compute spam insights: {e}")
+        return error_response(
+            ErrorCode.INSIGHTS_FAILED,
+            "Failed to compute spam insights.",
+            500,
+            request_id=_current_request_id(),
+        )
 
 
 # ============================================
@@ -1656,23 +1772,23 @@ def imap_connect():
 # ============================================
 
 
-def _env_flag(name, default=False):
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
 if __name__ == "__main__":
-    FLASK_PORT = int(os.getenv("FLASK_PORT", 5000))
-    FLASK_DEBUG = _env_flag("FLASK_DEBUG", default=False)
-    FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
-
-    if FLASK_DEBUG and FLASK_HOST not in ("127.0.0.1", "localhost", "::1"):
+    # load_settings() already refuses an unsafe FLASK_DEBUG/non-loopback host
+    # combination at import; this mirrors the check at the run site as a final
+    # guard before the debugger could ever be exposed.
+    if settings.flask_debug and settings.flask_host not in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    ):
         raise SystemExit(
             "Refusing to start: FLASK_DEBUG is enabled while binding to "
-            f"'{FLASK_HOST}'. The interactive debugger must never be exposed on "
-            "a non-loopback interface."
+            f"'{settings.flask_host}'. The interactive debugger must never be "
+            "exposed on a non-loopback interface."
         )
 
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
+    app.run(
+        host=settings.flask_host,
+        port=settings.flask_port,
+        debug=settings.flask_debug,
+    )

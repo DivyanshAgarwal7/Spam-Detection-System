@@ -27,7 +27,8 @@ from   enum                     import Enum
 import logging
 import os
 
-from   flask                    import jsonify, request
+from   errors                   import ErrorCode, error_detail
+from   flask                    import g, jsonify, request
 from   flask_limiter            import Limiter
 from   flask_limiter.errors     import RateLimitExceeded
 from   flask_limiter.util       import get_remote_address
@@ -200,11 +201,19 @@ def rate_limit_exceeded_handler(exc):
         request.endpoint,
         limit,
     )
+    message = f"Rate limit exceeded ({limit}). Please retry later."
+    # Additive envelope (#986): keep the legacy success/error/message fields the
+    # existing 429 callers read, and add the structured error_detail block.
     response = jsonify(
         {
             "success": False,
             "error": "Too Many Requests",
-            "message": f"Rate limit exceeded ({limit}). Please retry later.",
+            "message": message,
+            "error_detail": error_detail(
+                ErrorCode.RATE_LIMITED,
+                message,
+                request_id=getattr(g, "request_id", "unknown"),
+            ),
         }
     )
     return response, 429
