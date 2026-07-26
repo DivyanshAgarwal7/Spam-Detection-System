@@ -39,6 +39,18 @@ Reactjs: (http://localhost:5173)
 
 
 ---
+## 📄 API Reference
+
+The Flask ML API publishes a machine-readable OpenAPI 3.0 contract, so
+integrators (the Node gateway, browser extension, mobile app) can generate
+typed SDKs or validate requests instead of reading `api.py` by hand.
+
+* **OpenAPI spec:** [`GET /openapi.json`](http://127.0.0.1:5000/openapi.json) —
+  the full OpenAPI 3.0 document (info, servers, the `X-Internal-Secret`
+  security scheme, and every core route's request/response schema). This
+  endpoint is public (no `X-Internal-Secret` required).
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 
