@@ -62,6 +62,13 @@ except ImportError:
 
 load_dotenv()
 
+# Validate the entire ML API configuration once, up front. load_settings()
+# aggregates every problem (missing/short INTERNAL_SECRET, bad port, unusable
+# model files, an unsafe FLASK_DEBUG/host combination, ...) into a single
+# ConfigError, so a misconfigured deployment fails fast at boot instead of on
+# the first request. See settings.py.
+settings = load_settings()
+
 app = Flask(__name__)
 
 xai_engine = ExplanationEngine()
@@ -78,29 +85,10 @@ configure_rate_limiting(app)
 # ZERO TRUST - INTERNAL SECRET
 # ============================================
 
-# Shared secret that the trusted Node/Express backend attaches to every request.
-# This is mandatory configuration: there is intentionally NO hardcoded fallback.
-INTERNAL_SECRET_MIN_LENGTH = 32
-
-
-def _load_internal_secret():
-    secret = os.getenv("INTERNAL_SECRET")
-    if not secret:
-        raise RuntimeError(
-            "INTERNAL_SECRET is not set. This shared secret authenticates "
-            "requests from the Node/Express backend and is mandatory. Generate "
-            'one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` '
-            "and set it (identically) for both the Node and Flask services."
-        )
-    if len(secret) < INTERNAL_SECRET_MIN_LENGTH:
-        raise RuntimeError(
-            f"INTERNAL_SECRET is too short ({len(secret)} characters); it must "
-            f"be at least {INTERNAL_SECRET_MIN_LENGTH} characters."
-        )
-    return secret
-
-
-INTERNAL_SECRET = _load_internal_secret()
+# Shared secret the trusted Node/Express backend attaches to every request.
+# Presence and minimum length are validated by load_settings(); this alias is
+# what the request gates below compare against.
+INTERNAL_SECRET = settings.internal_secret
 
 # Paths reachable without the internal secret (liveness/readiness probes and
 # the public OpenAPI document).
@@ -197,11 +185,10 @@ def ip_allowlist(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         # Skip in development
-        if os.getenv("NODE_ENV") == "development":
+        if settings.node_env == "development":
             return f(*args, **kwargs)
 
-        allowed_ips = os.getenv("SERVICE_IP_ALLOWLIST", "127.0.0.1,::1")
-        allowed_list = [ip.strip() for ip in allowed_ips.split(",")]
+        allowed_list = settings.service_ip_allowlist
 
         client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or ""
         # Get first IP if multiple
@@ -326,30 +313,13 @@ def handle_internal_error(e):
 
 BASE_DIR = Path(__file__).resolve().parent
 
-
-def resolve_path(env_var, default_filename):
-    val = os.getenv(env_var)
-    if val:
-        p = Path(val)
-        if p.is_absolute():
-            return val
-        if p.exists() and p.stat().st_size > 0:
-            return val
-        p_base = BASE_DIR / p
-        if p_base.exists() and p_base.stat().st_size > 0:
-            return str(p_base)
-        p_name = BASE_DIR / p.name
-        if p_name.exists() and p_name.stat().st_size > 0:
-            return str(p_name)
-        return val
-    return str(BASE_DIR / default_filename)
-
-
-MODEL_PATH = resolve_path("MODEL_PATH", "linear_svm_model.pkl")
-VECTORIZER_PATH = resolve_path("VECTORIZER_PATH", "tfidf_vectorizer.pkl")
-LABEL_ENCODER_PATH = resolve_path("LABEL_ENCODER_PATH", "label_encoder.pkl")
-URL_MODEL_PATH = resolve_path("URL_MODEL_PATH", "url_detector.pkl")
-URL_VECTORIZER_PATH = resolve_path("URL_VECTORIZER_PATH", "url_vectorizer.pkl")
+# Resolved and existence-checked by load_settings(); aliased here so the rest of
+# the module keeps its familiar names.
+MODEL_PATH = settings.model_path
+VECTORIZER_PATH = settings.vectorizer_path
+LABEL_ENCODER_PATH = settings.label_encoder_path
+URL_MODEL_PATH = settings.url_model_path
+URL_VECTORIZER_PATH = settings.url_vectorizer_path
 
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
@@ -604,7 +574,7 @@ def heuristic_url_is_malicious(url):
     return tld in SUSPICIOUS_TLDS
 
 
-MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 10000))
+MAX_MESSAGE_LENGTH = settings.max_message_length
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1673,23 +1643,23 @@ def imap_connect():
 # ============================================
 
 
-def _env_flag(name, default=False):
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
 if __name__ == "__main__":
-    FLASK_PORT = int(os.getenv("FLASK_PORT", 5000))
-    FLASK_DEBUG = _env_flag("FLASK_DEBUG", default=False)
-    FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
-
-    if FLASK_DEBUG and FLASK_HOST not in ("127.0.0.1", "localhost", "::1"):
+    # load_settings() already refuses an unsafe FLASK_DEBUG/non-loopback host
+    # combination at import; this mirrors the check at the run site as a final
+    # guard before the debugger could ever be exposed.
+    if settings.flask_debug and settings.flask_host not in (
+        "127.0.0.1",
+        "localhost",
+        "::1",
+    ):
         raise SystemExit(
             "Refusing to start: FLASK_DEBUG is enabled while binding to "
-            f"'{FLASK_HOST}'. The interactive debugger must never be exposed on "
-            "a non-loopback interface."
+            f"'{settings.flask_host}'. The interactive debugger must never be "
+            "exposed on a non-loopback interface."
         )
 
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
+    app.run(
+        host=settings.flask_host,
+        port=settings.flask_port,
+        debug=settings.flask_debug,
+    )
