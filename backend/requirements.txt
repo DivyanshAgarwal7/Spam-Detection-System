@@ -15,6 +15,8 @@ flask-limiter>=3.5.0
 # Optional: only needed for the Redis-backed distributed rate-limit store
 # (issue #939). Without it the limiter uses its in-memory fallback.
 redis>=4.0.0
+# Prometheus instrumentation for the /metrics endpoint (issue #984).
+prometheus-client>=0.20.0
 pytest
 shap
 lime
