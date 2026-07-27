@@ -47,8 +47,13 @@ typed SDKs or validate requests instead of reading `api.py` by hand.
 
 * **OpenAPI spec:** [`GET /openapi.json`](http://127.0.0.1:5000/openapi.json) —
   the full OpenAPI 3.0 document (info, servers, the `X-Internal-Secret`
-  security scheme, and every core route's request/response schema). This
-  endpoint is public (no `X-Internal-Secret` required).
+  security scheme, and every route's request/response schema).
+* **Swagger UI:** [`GET /docs`](http://127.0.0.1:5000/docs) — interactive,
+  human-browsable docs rendered from `/openapi.json`.
+
+Both endpoints are public (no `X-Internal-Secret` required). A coverage test
+(`backend/tests/test_openapi_coverage.py`) asserts every registered route is
+documented, so the spec never drifts from the code.
 
 ---
 ## System Stability & Environment Fixes

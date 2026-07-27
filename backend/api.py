@@ -93,6 +93,8 @@ configure_rate_limiting(app)
 # what the request gates below compare against.
 INTERNAL_SECRET = settings.internal_secret
 
+# Paths reachable without the internal secret (liveness/readiness probes and
+# the public API documentation surface).
 # Paths reachable without the internal secret (liveness/readiness probes, the
 # public OpenAPI document, and the Prometheus /metrics endpoint — it exposes only
 # aggregate counters, never message content).
@@ -102,6 +104,7 @@ PUBLIC_PATHS = {
     "/api/roles",
     "/api/rate-limit-status",
     "/openapi.json",
+    "/docs",
     "/metrics",
 }
 
@@ -777,7 +780,7 @@ def rate_limit_status():
 
 
 # ============================================
-# API DOCUMENTATION (OpenAPI 3.0)
+# API DOCUMENTATION (OpenAPI 3.0 + Swagger UI)
 # ============================================
 
 
@@ -786,6 +789,40 @@ def rate_limit_status():
 def openapi_json():
     """Machine-readable OpenAPI 3.0 contract for this service (issue #985)."""
     return jsonify(build_spec())
+
+
+# Swagger UI is loaded from a pinned CDN bundle rather than vendored assets so
+# the docs page adds no build step or Python dependency; it reads the spec that
+# /openapi.json already serves.
+_SWAGGER_UI_VERSION = "5.17.14"
+_SWAGGER_UI_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spam Detection System - ML API Reference</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@{_SWAGGER_UI_VERSION}/swagger-ui.css" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@{_SWAGGER_UI_VERSION}/swagger-ui-bundle.js" crossorigin></script>
+    <script>
+      window.onload = () => {{
+        window.ui = SwaggerUIBundle({{
+          url: "/openapi.json",
+          dom_id: "#swagger-ui",
+        }});
+      }};
+    </script>
+  </body>
+</html>"""
+
+
+@app.route("/docs", methods=["GET"])
+@validate_request
+def swagger_ui():
+    """Interactive Swagger UI rendering /openapi.json (issue #985)."""
+    return _SWAGGER_UI_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 # ============================================

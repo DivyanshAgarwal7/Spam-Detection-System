@@ -2,14 +2,15 @@
 
 ``build_spec()`` returns a plain ``dict`` describing the service's HTTP
 contract: ``info``, ``servers``, the ``X-Internal-Secret`` security scheme,
-and ``paths``/``components`` for the API's core routes. It is served verbatim
-at ``GET /openapi.json``.
+and ``paths``/``components`` for the API's routes. It is served verbatim at
+``GET /openapi.json`` and rendered by the Swagger UI at ``GET /docs``.
 
 The document is deliberately hand-written rather than generated from the
 route table: the ``/predict`` response has a rich, evolving shape
 (``confidence``, ``domain_analysis``, ``url_risk``, ``explanation``,
 ``severity``, ...) that a decorator-based generator would not capture
-faithfully.
+faithfully. To keep the hand-authored spec honest, ``test_openapi_coverage``
+asserts every non-static registered rule is documented here.
 
 >>> spec = build_spec()
 >>> spec["openapi"]
@@ -46,16 +47,18 @@ _ERROR = {"$ref": "#/components/schemas/Error"}
 
 
 def build_spec():
-    """Return the OpenAPI 3.0 document for the Flask ML API as a dict.
+    """Return the full OpenAPI 3.0 document for the Flask ML API as a dict.
 
     The result is JSON-serialisable and stable across calls (no runtime state
     is read), so it can be cached or diffed by consumers.
     """
     paths = {}
     paths.update(_core_paths())
+    paths.update(_extended_paths())
 
     schemas = {}
     schemas.update(_core_schemas())
+    schemas.update(_extended_schemas())
 
     return {
         "openapi": OPENAPI_VERSION,
@@ -84,7 +87,7 @@ def build_spec():
 
 
 # ============================================================================
-# CORE ROUTES: /predict, /feedback, /feedback/stats, /spam-insights,
+# CORE ROUTES (PR 1/2): /predict, /feedback, /feedback/stats, /spam-insights,
 # /importance, /analyze-email-header, /health
 # ============================================================================
 
@@ -477,6 +480,491 @@ def _core_schemas():
 
 
 # ============================================================================
+# EXTENDED ROUTES (PR 2/2): remaining registered rules so the drift-guard
+# coverage test passes -- gmail/outlook/imap, bulk-predict, analytics,
+# wordcloud, roles, /openapi.json and /docs.
+# ============================================================================
+
+
+def _extended_paths():
+    return {
+        "/": {
+            "get": {
+                "summary": "Root banner",
+                "operationId": "getRoot",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "Plain-text banner.",
+                        "content": {"text/plain": {"schema": {"type": "string"}}},
+                    }
+                },
+            }
+        },
+        "/api/roles": {
+            "get": {
+                "summary": "Available roles and permissions",
+                "operationId": "getRoles",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Role/permission matrix.",
+                        {"type": "object", "additionalProperties": True},
+                    )
+                },
+            }
+        },
+        "/api/rate-limit-status": {
+            "get": {
+                "summary": "Configured rate-limit windows",
+                "operationId": "getRateLimitStatus",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Rate-limit configuration.",
+                        {"type": "object", "additionalProperties": True},
+                    )
+                },
+            }
+        },
+        "/api/wordcloud": {
+            "get": {
+                "summary": "Spam word frequencies for the word cloud",
+                "operationId": "getWordcloud",
+                "tags": ["Insights"],
+                "responses": {
+                    "200": _json_response(
+                        "Word/count pairs from the database or a sample fallback.",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "success": {"type": "boolean"},
+                                "source": {"type": "string"},
+                                "data": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "word": {"type": "string"},
+                                            "count": {"type": "integer"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    )
+                },
+            }
+        },
+        "/api/word-of-the-day": {
+            "get": {
+                "summary": "Spam word of the day with metadata",
+                "operationId": "getWordOfTheDay",
+                "tags": ["Insights"],
+                "responses": {
+                    "200": _json_response(
+                        "Word plus definition, context and safety tips.",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "success": {"type": "boolean"},
+                                "data": {
+                                    "type": "object",
+                                    "properties": {
+                                        "word": {"type": "string"},
+                                        "count": {"type": "integer", "nullable": True},
+                                        "definition": {"type": "string"},
+                                        "context": {"type": "string"},
+                                        "tips": {"type": "string"},
+                                    },
+                                },
+                            },
+                        },
+                    )
+                },
+            }
+        },
+        "/gmail/auth-url": {
+            "get": {
+                "summary": "Gmail OAuth consent URL",
+                "operationId": "getGmailAuthUrl",
+                "tags": ["Gmail"],
+                "parameters": [_redirect_uri_param()],
+                "responses": {
+                    "200": _json_response(
+                        "Consent page URL.",
+                        {"$ref": "#/components/schemas/AuthUrlResponse"},
+                    )
+                },
+            }
+        },
+        "/gmail/callback": {
+            "get": {
+                "summary": "Exchange a Gmail authorization code for tokens",
+                "operationId": "gmailCallback",
+                "tags": ["Gmail"],
+                "parameters": [
+                    _query_param("code", "OAuth authorization code.", required=True),
+                    _redirect_uri_param(),
+                ],
+                "responses": {
+                    "200": _json_response(
+                        "Gmail connected.",
+                        {"$ref": "#/components/schemas/MessageResponse"},
+                    ),
+                    "400": _error_response("Authorization code missing."),
+                    "401": _error_response("Missing X-User-Username header."),
+                    "500": _error_response("Token exchange failed."),
+                },
+            }
+        },
+        "/gmail/emails": {
+            "get": {
+                "summary": "Fetch the latest Gmail messages",
+                "operationId": "getGmailEmails",
+                "tags": ["Gmail"],
+                "responses": {
+                    "200": _json_response(
+                        "Fetched emails.",
+                        {"$ref": "#/components/schemas/EmailListResponse"},
+                    ),
+                    "401": _error_response("Gmail account not connected."),
+                    "500": _error_response("Fetch failed."),
+                },
+            }
+        },
+        "/outlook/auth-url": {
+            "get": {
+                "summary": "Outlook OAuth consent URL",
+                "operationId": "getOutlookAuthUrl",
+                "tags": ["Outlook"],
+                "parameters": [_redirect_uri_param()],
+                "responses": {
+                    "200": _json_response(
+                        "Consent page URL.",
+                        {"$ref": "#/components/schemas/AuthUrlResponse"},
+                    )
+                },
+            }
+        },
+        "/outlook/callback": {
+            "get": {
+                "summary": "Exchange an Outlook authorization code for tokens",
+                "operationId": "outlookCallback",
+                "tags": ["Outlook"],
+                "parameters": [
+                    _query_param("code", "OAuth authorization code.", required=True),
+                    _redirect_uri_param(),
+                ],
+                "responses": {
+                    "200": _json_response(
+                        "Outlook connected.",
+                        {"$ref": "#/components/schemas/MessageResponse"},
+                    ),
+                    "400": _error_response("Authorization code missing."),
+                    "401": _error_response("Missing X-User-Username header."),
+                    "500": _error_response("Token exchange failed."),
+                },
+            }
+        },
+        "/outlook/emails": {
+            "get": {
+                "summary": "Fetch the latest Outlook messages",
+                "operationId": "getOutlookEmails",
+                "tags": ["Outlook"],
+                "responses": {
+                    "200": _json_response(
+                        "Fetched emails.",
+                        {"$ref": "#/components/schemas/EmailListResponse"},
+                    ),
+                    "401": _error_response("Outlook account not connected."),
+                    "500": _error_response("Fetch failed."),
+                },
+            }
+        },
+        "/scan-emails": {
+            "post": {
+                "summary": "Fetch and classify a provider inbox batch",
+                "operationId": "scanEmails",
+                "tags": ["Email"],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["provider"],
+                                "properties": {
+                                    "provider": {
+                                        "type": "string",
+                                        "enum": ["gmail", "outlook"],
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": _json_response(
+                        "Scan results.",
+                        {"type": "object", "additionalProperties": True},
+                    ),
+                    "400": _error_response("Invalid provider."),
+                    "401": _error_response("Provider account not connected."),
+                    "500": _error_response("Scan execution failed."),
+                },
+            }
+        },
+        "/imap/connect": {
+            "post": {
+                "summary": "Connect an IMAP inbox for scheduled scanning",
+                "operationId": "imapConnect",
+                "tags": ["Email"],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ImapConnectRequest"
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": _json_response(
+                        "Inbox connected and scheduled.",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "message": {"type": "string"},
+                                "scan_interval_minutes": {"type": "integer"},
+                            },
+                        },
+                    ),
+                    "400": _error_response(
+                        "Missing fields, bad interval or no consent."
+                    ),
+                    "401": _error_response("IMAP authentication failed."),
+                    "502": _error_response("Could not reach the IMAP server."),
+                },
+            }
+        },
+        "/bulk-predict": {
+            "post": {
+                "summary": "Batch-classify a CSV/TXT upload",
+                "operationId": "bulkPredict",
+                "tags": ["Prediction"],
+                "requestBody": _file_upload_body(),
+                "responses": {
+                    "200": _json_response(
+                        "Batch results with spam statistics.",
+                        {"$ref": "#/components/schemas/BulkPredictResponse"},
+                    ),
+                    "400": _error_response("No/invalid file."),
+                    "413": _error_response("File exceeds the 2MB limit."),
+                },
+            }
+        },
+        "/bulk-predict/export": {
+            "post": {
+                "summary": "Batch-classify and download a CSV report",
+                "operationId": "bulkPredictExport",
+                "tags": ["Prediction"],
+                "requestBody": _file_upload_body(),
+                "responses": {
+                    "200": {
+                        "description": "CSV report download.",
+                        "content": {
+                            "text/csv": {
+                                "schema": {"type": "string", "format": "binary"}
+                            }
+                        },
+                    },
+                    "400": _error_response("No/invalid file."),
+                    "413": _error_response("File exceeds the 2MB limit."),
+                    "500": _error_response("Report generation failed."),
+                },
+            }
+        },
+        "/analytics/summary": {
+            "get": {
+                "summary": "Scan totals and threat percentages",
+                "operationId": "getAnalyticsSummary",
+                "tags": ["Analytics"],
+                "responses": {
+                    "200": _json_response(
+                        "Aggregate scan counts.",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "totalScanned": {"type": "integer"},
+                                "threatCount": {"type": "integer"},
+                                "threatPercentage": {"type": "number"},
+                                "cleanPercentage": {"type": "number"},
+                            },
+                        },
+                    )
+                },
+            }
+        },
+        "/analytics/trends": {
+            "get": {
+                "summary": "Daily scan counts by predicted label",
+                "operationId": "getAnalyticsTrends",
+                "tags": ["Analytics"],
+                "responses": {
+                    "200": {
+                        "description": "Per-day, per-label counts.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "date": {"type": "string"},
+                                            "label": {"type": "string"},
+                                            "count": {"type": "integer"},
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        },
+        "/analytics/breakdown": {
+            "get": {
+                "summary": "Scan counts by input type",
+                "operationId": "getAnalyticsBreakdown",
+                "tags": ["Analytics"],
+                "responses": {
+                    "200": {
+                        "description": "Per-type counts.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"type": "string"},
+                                            "count": {"type": "integer"},
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        },
+        "/reports/export-pdf": {
+            "get": {
+                "summary": "PDF report export (not yet implemented)",
+                "operationId": "exportReportPdf",
+                "tags": ["Analytics"],
+                "responses": {
+                    "501": _error_response("Coming soon."),
+                },
+            }
+        },
+        "/openapi.json": {
+            "get": {
+                "summary": "This OpenAPI 3.0 document",
+                "operationId": "getOpenapiSpec",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "The OpenAPI specification.",
+                        {"type": "object", "additionalProperties": True},
+                    )
+                },
+            }
+        },
+        "/docs": {
+            "get": {
+                "summary": "Swagger UI",
+                "operationId": "getDocs",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "Interactive Swagger UI HTML page.",
+                        "content": {"text/html": {"schema": {"type": "string"}}},
+                    }
+                },
+            }
+        },
+    }
+
+
+def _extended_schemas():
+    return {
+        "AuthUrlResponse": {
+            "type": "object",
+            "properties": {"auth_url": {"type": "string"}},
+        },
+        "EmailListResponse": {
+            "type": "object",
+            "properties": {
+                "emails": {
+                    "type": "array",
+                    "items": {"type": "object", "additionalProperties": True},
+                }
+            },
+        },
+        "ImapConnectRequest": {
+            "type": "object",
+            "required": ["host", "imap_username", "password", "consent"],
+            "properties": {
+                "host": {"type": "string"},
+                "port": {"type": "integer", "default": 993},
+                "imap_username": {"type": "string"},
+                "password": {"type": "string", "format": "password"},
+                "scan_interval_minutes": {
+                    "type": "integer",
+                    "description": "Must be one of the store's allowed intervals.",
+                },
+                "consent": {
+                    "type": "boolean",
+                    "description": "Explicit consent to store and scan the inbox.",
+                },
+            },
+        },
+        "BulkPredictResponse": {
+            "type": "object",
+            "properties": {
+                "total_messages": {"type": "integer"},
+                "spam_count": {"type": "integer"},
+                "non_spam_count": {"type": "integer"},
+                "spam_percentage": {"type": "number"},
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"},
+                            "prediction": {"type": "string"},
+                            "result": {"type": "string"},
+                            "confidence": {"type": "number"},
+                            "confidence_score": {"type": "number"},
+                            "decision_score": {"type": "number"},
+                            "confidence_level": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+# ============================================================================
 # Small builders shared by the path definitions.
 # ============================================================================
 
@@ -490,3 +978,38 @@ def _json_response(description, schema):
 
 def _error_response(description):
     return _json_response(description, _ERROR)
+
+
+def _query_param(name, description, required=False, schema=None):
+    return {
+        "name": name,
+        "in": "query",
+        "required": required,
+        "schema": schema or {"type": "string"},
+        "description": description,
+    }
+
+
+def _redirect_uri_param():
+    return _query_param("redirect_uri", "OAuth redirect URI.")
+
+
+def _file_upload_body():
+    return {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["file"],
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "CSV (with a text/message column) or TXT file.",
+                        }
+                    },
+                }
+            }
+        },
+    }
