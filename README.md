@@ -415,6 +415,38 @@ Each limit accepts either the native `"<n> per <window>"` form or the Node-style
 `Retry-After` header, and each rejection is logged with the client, endpoint, and
 limit for operational visibility.
 
+## Error format
+
+Every error response from the Flask ML API uses one machine-readable envelope
+(issue #986). It is **backward compatible**: the legacy top-level `error` string
+is always present, and a structured `error_detail` block is added alongside it.
+
+```json
+{
+  "error": "No text provided",
+  "error_detail": {
+    "code": "NO_TEXT_PROVIDED",
+    "message": "No text provided",
+    "request_id": "req-abc123"
+  }
+}
+```
+
+* `error` — human-readable message; unchanged for existing clients.
+* `error_detail.code` — stable `ErrorCode` value (e.g. `NO_TEXT_PROVIDED`,
+  `INVALID_JSON_BODY`, `TEXT_TOO_LONG`, `INVALID_FEEDBACK`, `FORBIDDEN`,
+  `NOT_FOUND`, `RATE_LIMITED`, `PROVIDER_NOT_CONNECTED`, `UPSTREAM_FETCH_FAILED`,
+  `INTERNAL_ERROR`). Branch on this rather than parsing the message.
+* `error_detail.message` — same text as `error`.
+* `error_detail.request_id` — echoes `X-Request-ID` (`g.request_id`) so a failure
+  can be correlated with server logs.
+
+Success responses are unchanged. A few error responses carry extra top-level
+fields for backward compatibility: the zero-trust `403` and the word-cloud
+endpoints keep `success: false`, and the `429` keeps its `success` / `error` /
+`message` fields — all with `error_detail` added. Success responses are never
+modified. Codes are defined in `backend/errors.py`.
+
 ---
 
 ## 📊 Metrics & Monitoring

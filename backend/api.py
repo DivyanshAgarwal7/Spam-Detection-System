@@ -1404,15 +1404,22 @@ def analyze_email_header():
                     except UnicodeDecodeError:
                         headers = raw_bytes.decode("latin-1", errors="replace")
                 except Exception as e:
-                    return jsonify({"error": f"Failed to read EML file: {str(e)}"}), 400
+                    app.logger.error(f"Failed to read EML file: {e}")
+                    raise ApiError(
+                        ErrorCode.HEADER_READ_FAILED, "Failed to read EML file", 400
+                    ) from e
             else:
-                return jsonify({"error": "No email headers provided"}), 400
+                raise ApiError(
+                    ErrorCode.NO_HEADERS_PROVIDED, "No email headers provided", 400
+                )
         else:
             data = request.get_json(silent=True) or {}
             headers = data.get("headers", "")
 
         if not headers or not isinstance(headers, str) or not headers.strip():
-            return jsonify({"error": "No email headers provided"}), 400
+            raise ApiError(
+                ErrorCode.NO_HEADERS_PROVIDED, "No email headers provided", 400
+            )
 
         analysis = analyze_headers(headers)
         return jsonify(
@@ -1425,8 +1432,15 @@ def analyze_email_header():
                 "analysis": analysis,
             }
         )
+    except ApiError:
+        # Typed validation errors raised above must reach the ApiError handler
+        # unchanged rather than being flattened into a generic 500.
+        raise
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Email header analysis failed: {e}")
+        raise ApiError(
+            ErrorCode.HEADER_ANALYSIS_FAILED, "Failed to analyze email headers", 500
+        ) from e
 
 
 @app.route("/spam-insights", methods=["GET"])
@@ -1473,15 +1487,24 @@ def gmail_callback():
     )
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     if not code:
-        return jsonify({"error": "Authorization code is missing"}), 400
+        raise ApiError(
+            ErrorCode.MISSING_AUTH_CODE, "Authorization code is missing", 400
+        )
     try:
         tokens = get_gmail_tokens(code, redirect_uri)
         oauth_store.save_oauth_tokens(username, "gmail", tokens)
         return jsonify({"message": "Gmail connected successfully"})
     except Exception as e:
-        return jsonify({"error": f"Failed to exchange Google code: {str(e)}"}), 500
+        app.logger.error(f"Failed to exchange Google code: {e}")
+        raise ApiError(
+            ErrorCode.OAUTH_EXCHANGE_FAILED,
+            "Failed to exchange Google authorization code",
+            500,
+        ) from e
 
 
 @app.route("/gmail/emails", methods=["GET"])
@@ -1491,12 +1514,16 @@ def gmail_callback():
 def gmail_emails():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
 
     user_tokens = oauth_store.get_oauth_tokens(username, "gmail")
 
     if not user_tokens:
-        return jsonify({"error": "Gmail account not connected"}), 401
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED, "Gmail account not connected", 401
+        )
     try:
         try:
             emails = fetch_gmail_emails(user_tokens.get("access_token"), limit=50)
@@ -1513,7 +1540,10 @@ def gmail_emails():
                 raise err
         return jsonify({"emails": emails})
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch Gmail emails: {str(e)}"}), 500
+        app.logger.error(f"Failed to fetch Gmail emails: {e}")
+        raise ApiError(
+            ErrorCode.UPSTREAM_FETCH_FAILED, "Failed to fetch Gmail emails", 500
+        ) from e
 
 
 # ============================================
@@ -1540,15 +1570,24 @@ def outlook_callback():
     )
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     if not code:
-        return jsonify({"error": "Authorization code is missing"}), 400
+        raise ApiError(
+            ErrorCode.MISSING_AUTH_CODE, "Authorization code is missing", 400
+        )
     try:
         tokens = get_outlook_tokens(code, redirect_uri)
         oauth_store.save_oauth_tokens(username, "outlook", tokens)
         return jsonify({"message": "Outlook connected successfully"})
     except Exception as e:
-        return jsonify({"error": f"Failed to exchange Outlook code: {str(e)}"}), 500
+        app.logger.error(f"Failed to exchange Outlook code: {e}")
+        raise ApiError(
+            ErrorCode.OAUTH_EXCHANGE_FAILED,
+            "Failed to exchange Outlook authorization code",
+            500,
+        ) from e
 
 
 @app.route("/outlook/emails", methods=["GET"])
@@ -1557,11 +1596,15 @@ def outlook_callback():
 def outlook_emails():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     user_tokens = oauth_store.get_oauth_tokens(username, "outlook")
 
     if not user_tokens:
-        return jsonify({"error": "Outlook account not connected"}), 401
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED, "Outlook account not connected", 401
+        )
 
     try:
         try:
@@ -1579,7 +1622,10 @@ def outlook_emails():
                 raise err
         return jsonify({"emails": emails})
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch Outlook emails: {str(e)}"}), 500
+        app.logger.error(f"Failed to fetch Outlook emails: {e}")
+        raise ApiError(
+            ErrorCode.UPSTREAM_FETCH_FAILED, "Failed to fetch Outlook emails", 500
+        ) from e
 
 
 @app.route("/scan-emails", methods=["POST"])
@@ -1590,18 +1636,22 @@ def scan_emails_route():
     provider = data.get("provider", "").lower()
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
 
     if provider not in ("gmail", "outlook"):
-        return (
-            jsonify({"error": "Invalid provider. Must be 'gmail' or 'outlook'."}),
+        raise ApiError(
+            ErrorCode.INVALID_PROVIDER,
+            "Invalid provider. Must be 'gmail' or 'outlook'.",
             400,
         )
 
     user_tokens = oauth_store.get_oauth_tokens(username, provider)
     if not user_tokens:
-        return (
-            jsonify({"error": f"{provider.capitalize()} account not connected."}),
+        raise ApiError(
+            ErrorCode.PROVIDER_NOT_CONNECTED,
+            f"{provider.capitalize()} account not connected.",
             401,
         )
 
@@ -1642,7 +1692,10 @@ def scan_emails_route():
         scan_results = scan_emails_with_model(emails)
         return jsonify(scan_results)
     except Exception as e:
-        return jsonify({"error": f"Email scan execution failed: {str(e)}"}), 500
+        app.logger.error(f"Email scan execution failed: {e}")
+        raise ApiError(
+            ErrorCode.EMAIL_SCAN_FAILED, "Email scan execution failed", 500
+        ) from e
 
 
 # ============================================
@@ -1774,7 +1827,9 @@ def _require_username():
 def imap_connect():
     username = _require_username()
     if not username:
-        return jsonify({"error": "Missing X-User-Username header"}), 401
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
     data = request.get_json(silent=True) or {}
 
     host = data.get("host", "").strip()
@@ -1785,35 +1840,40 @@ def imap_connect():
     consent = data.get("consent", False)
 
     if not host or not imap_username or not password:
-        return jsonify({"error": "host, imap_username and password are required"}), 400
+        raise ApiError(
+            ErrorCode.INVALID_IMAP_CONFIG,
+            "host, imap_username and password are required",
+            400,
+        )
 
     if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
-        return (
-            jsonify(
-                {
-                    "error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"
-                }
-            ),
+        raise ApiError(
+            ErrorCode.INVALID_SCAN_INTERVAL,
+            f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}",
             400,
         )
 
     if not consent:
-        return (
-            jsonify(
-                {"error": "Explicit consent is required before connecting an inbox"}
-            ),
+        raise ApiError(
+            ErrorCode.CONSENT_REQUIRED,
+            "Explicit consent is required before connecting an inbox",
             400,
         )
 
     try:
         imap_connector.test_imap_connection(host, port, imap_username, password)
     except imap_connector.ImapAuthError as e:
-        return (
-            jsonify({"error": f"Could not authenticate with the IMAP server: {e}"}),
+        raise ApiError(
+            ErrorCode.IMAP_AUTH_FAILED,
+            f"Could not authenticate with the IMAP server: {e}",
             401,
-        )
+        ) from e
     except Exception as e:
-        return jsonify({"error": f"Could not connect to the IMAP server: {e}"}), 502
+        raise ApiError(
+            ErrorCode.IMAP_CONNECT_FAILED,
+            f"Could not connect to the IMAP server: {e}",
+            502,
+        ) from e
 
     encrypted_password = encrypt_secret(password)
     imap_store.save_connection(
