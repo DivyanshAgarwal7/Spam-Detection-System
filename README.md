@@ -483,6 +483,39 @@ scrape_configs:
 
 ---
 
+## 🩺 Health Probes & Graceful Shutdown
+
+The Flask ML API exposes split liveness/readiness probes so an orchestrator can
+tell "restart this pod" apart from "stop routing traffic here" (issue #1009).
+All three probes are public (no `X-Internal-Secret` required).
+
+| Endpoint | Meaning | Codes |
+| --- | --- | --- |
+| `GET /health/live` | Process is up and can answer. Never depends on downstream state. | `200` always |
+| `GET /health/ready` | Safe to route traffic: serving state is loaded and the spam-words DB and rate-limit store both respond. | `200` ready, `503` otherwise |
+| `GET /health` | Backward-compatible alias of the original static probe. | `200` `{"status":"ok"}` |
+
+A ready response reports each dependency:
+
+```json
+{
+  "status": "ready",
+  "checks": { "serving_state": true, "spam_words_db": true, "rate_limit_store": true }
+}
+```
+
+When any dependency is down, `/health/ready` returns a `503` in the standard
+error envelope (`error_detail.code = "NOT_READY"`) with the per-check map so the
+failing dependency is obvious.
+
+**Graceful shutdown.** On `SIGTERM` the API enters *draining* mode:
+`/health/ready` immediately starts returning `503` (so load balancers drain the
+instance), then the process waits for in-flight requests to finish before
+exiting, bounded by `DRAIN_TIMEOUT_SECONDS` (default `25`). Liveness stays `200`
+throughout so the pod is not force-restarted mid-drain.
+
+---
+
 ## 💻 React Frontend
 
 ### 📦 Setup

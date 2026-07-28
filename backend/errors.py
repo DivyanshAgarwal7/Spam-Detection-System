@@ -72,6 +72,9 @@ class ErrorCode(StrEnum):
     WORD_OF_DAY_FAILED = "WORD_OF_DAY_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
+    # ── Readiness / graceful shutdown (issue #1009) ──────────────────────
+    NOT_READY = "NOT_READY"
+
     # ── Email / OAuth / IMAP provider paths (PR 2/2) ─────────────────────
     MISSING_USERNAME = "MISSING_USERNAME"
     MISSING_AUTH_CODE = "MISSING_AUTH_CODE"
