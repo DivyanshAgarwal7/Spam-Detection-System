@@ -106,6 +106,7 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/docs",
     "/metrics",
+    "/model-info",
 }
 
 
@@ -395,7 +396,17 @@ xai_service = XAIService(
 # shared, thread-safe holder so POST /reload-model can atomically hot-swap in a
 # freshly retrained model without a restart (issue #973); handlers read from
 # serving_state.STATE rather than these module globals so the swap is visible.
+import model_registry
 import serving_state
+
+
+def _build_model_metadata():
+    """Fingerprint the currently-on-disk classifier artifacts (issue #1007)."""
+    return model_registry.build_metadata(
+        model_path=str(MODEL_PATH),
+        vectorizer_path=str(VECTORIZER_PATH),
+        label_encoder_path=str(LABEL_ENCODER_PATH),
+    )
 
 
 def _load_serving_objects():
@@ -413,6 +424,7 @@ def _load_serving_objects():
         "vectorizer": fresh_vectorizer,
         "label_encoder": fresh_label_encoder,
         "xai_service": fresh_xai_service,
+        "metadata": _build_model_metadata(),
     }
 
 
@@ -422,6 +434,7 @@ serving_state.init_state(
     label_encoder=label_encoder,
     xai_service=xai_service,
     loader=_load_serving_objects,
+    metadata=_build_model_metadata(),
 )
 
 
@@ -825,6 +838,26 @@ def swagger_ui():
     return _SWAGGER_UI_HTML, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
+@app.route("/model-info", methods=["GET"])
+@validate_request
+def model_info():
+    """Provenance for the currently served model set (issue #1007).
+
+    Public (see PUBLIC_PATHS): reports only artifact checksums, sizes and the
+    optional model-card fields, never any secret or message content. The
+    ``version`` mirrors ``/model-status`` and increments on each ``/reload-model``.
+    """
+    snapshot = serving_state.STATE.snapshot()
+    metadata = snapshot.metadata
+    return jsonify(
+        {
+            "version": snapshot.version,
+            "checksums": metadata.checksums if metadata is not None else {},
+            "metadata": metadata.to_dict() if metadata is not None else None,
+        }
+    )
+
+
 # ============================================
 # PREDICT ROUTE (Protected)
 # ============================================
@@ -1084,6 +1117,13 @@ def predict():
             severity=severity,
         )
 
+        # Provenance (issue #1007 part 2): tag every prediction with the version
+        # and short checksum of the exact model set that produced it, so a result
+        # can be traced back to a specific deployed/reloaded model.
+        response_data["model_version"] = serving.version
+        if serving.metadata is not None:
+            response_data["model_checksum"] = serving.metadata.short_checksum
+
         metrics.record_prediction(result=final_output, input_type=input_type)
 
         return jsonify(response_data)
@@ -1233,11 +1273,17 @@ def get_word_of_the_day():
 @validate_internal_request
 def get_feature_importance():
     try:
+        snapshot = serving_state.STATE.snapshot()
         top_features = [
             {"feature": word, "importance": score}
-            for word, score in serving_state.STATE.snapshot().xai_service.get_global_importance()
+            for word, score in snapshot.xai_service.get_global_importance()
         ]
-        return jsonify({"top_features": top_features})
+        # Same provenance tag as /predict (issue #1007 part 2): the importances
+        # belong to a specific model version, not the endpoint in the abstract.
+        response = {"top_features": top_features, "model_version": snapshot.version}
+        if snapshot.metadata is not None:
+            response["model_checksum"] = snapshot.metadata.short_checksum
+        return jsonify(response)
     except Exception as e:
         app.logger.error(f"Failed to compute feature importance: {e}")
         return error_response(

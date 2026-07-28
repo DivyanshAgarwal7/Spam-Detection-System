@@ -56,6 +56,60 @@ Both endpoints are public (no `X-Internal-Secret` required). A coverage test
 documented, so the spec never drifts from the code.
 
 ---
+## 🧾 Model Registry & Provenance
+
+The Flask ML API records **which** model bytes it is serving, so a deployed or
+hot-reloaded model can be identified and a prediction can be traced back to the
+exact artifacts that produced it (issue #1007). Fingerprints are computed by
+`backend/model_registry.py` (`build_metadata`) over the classifier `model`,
+`vectorizer` and `label_encoder`: each artifact's SHA-256, size and mtime, plus
+the optional human-authored fields (`trained_at`, `metrics`, `labels`) read from
+a `model_card.json` sitting next to the model when present.
+
+### `GET /model-info`
+
+Public (no `X-Internal-Secret` required). Reports the live model set — its
+`version` (mirrors `/model-status` and increments on every `/reload-model`), the
+per-artifact `checksums`, and the full `metadata`:
+
+```json
+{
+  "version": 3,
+  "checksums": {
+    "model": "9f2b…",
+    "vectorizer": "1c7a…",
+    "label_encoder": "e004…"
+  },
+  "metadata": {
+    "model": {"path": "…/linear_svm_model.pkl", "sha256": "9f2b…", "size_bytes": 24576, "mtime": 1753000000.0},
+    "vectorizer": {"path": "…/tfidf_vectorizer.pkl", "sha256": "1c7a…", "size_bytes": 81920, "mtime": 1753000000.0},
+    "label_encoder": {"path": "…/label_encoder.pkl", "sha256": "e004…", "size_bytes": 512, "mtime": 1753000000.0},
+    "short_checksum": "9f2b1a0c4d5e",
+    "trained_at": "2026-07-20T12:00:00Z",
+    "metrics": {"accuracy": 0.98},
+    "labels": ["ham", "spam", "smishing"]
+  }
+}
+```
+
+`metadata` is `null` when no provenance is available (e.g. a test harness that
+installs bare fakes). Dropping a `model_card.json` next to the model artifact is
+the only step needed to populate `trained_at` / `metrics` / `labels`.
+
+### Prediction & reload provenance
+
+`/predict` and `/importance` responses carry an additive `model_version` (and a
+short `model_checksum` when provenance is available) identifying the model set
+that served the request — existing fields are unchanged, so this is backward
+compatible. On every `/reload-model`, a structured audit line is logged:
+
+```
+model reloaded v2 -> v3 (checksum 1c7a… -> 9f2b…)
+```
+
+so a version bump and the model bytes going in and out are visible in the logs.
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 

@@ -351,6 +351,17 @@ def _core_schemas():
                     "description": "Computed spam severity summary.",
                     "additionalProperties": True,
                 },
+                "model_version": {
+                    "type": "integer",
+                    "description": (
+                        "Version of the model set that produced this prediction "
+                        "(issue #1007); increments on each /reload-model."
+                    ),
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of the model that produced this prediction.",
+                },
             },
             "required": [
                 "input",
@@ -453,7 +464,15 @@ def _core_schemas():
                             "importance": {"type": "number"},
                         },
                     },
-                }
+                },
+                "model_version": {
+                    "type": "integer",
+                    "description": "Version of the model these importances belong to (issue #1007).",
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of that model.",
+                },
             },
         },
         "EmailHeaderRequest": {
@@ -901,11 +920,78 @@ def _extended_paths():
                 },
             }
         },
+        "/model-info": {
+            "get": {
+                "summary": "Provenance for the currently served model",
+                "operationId": "getModelInfo",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Live model version, per-artifact checksums and the "
+                        "optional model-card metadata.",
+                        {"$ref": "#/components/schemas/ModelInfo"},
+                    )
+                },
+            }
+        },
     }
 
 
 def _extended_schemas():
     return {
+        "ArtifactInfo": {
+            "type": "object",
+            "description": "Content fingerprint of one model artifact.",
+            "properties": {
+                "path": {"type": "string"},
+                "sha256": {"type": "string"},
+                "size_bytes": {"type": "integer"},
+                "mtime": {"type": "number"},
+            },
+        },
+        "ModelInfo": {
+            "type": "object",
+            "description": (
+                "Provenance of the served model set (issue #1007). `version` "
+                "increments on each /reload-model; `checksums` maps each "
+                "artifact role to its SHA-256; `metadata` carries per-artifact "
+                "fingerprints plus the optional model-card fields, and is null "
+                "when no provenance is available."
+            ),
+            "properties": {
+                "version": {"type": "integer"},
+                "checksums": {
+                    "type": "object",
+                    "properties": {
+                        "model": {"type": "string"},
+                        "vectorizer": {"type": "string"},
+                        "label_encoder": {"type": "string"},
+                    },
+                },
+                "metadata": {
+                    "type": "object",
+                    "nullable": True,
+                    "properties": {
+                        "model": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "vectorizer": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "label_encoder": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "short_checksum": {"type": "string"},
+                        "trained_at": {"type": "string", "nullable": True},
+                        "metrics": {
+                            "type": "object",
+                            "nullable": True,
+                            "additionalProperties": True,
+                        },
+                        "labels": {
+                            "type": "array",
+                            "nullable": True,
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
         "AuthUrlResponse": {
             "type": "object",
             "properties": {"auth_url": {"type": "string"}},
