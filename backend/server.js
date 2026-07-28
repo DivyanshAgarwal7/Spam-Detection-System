@@ -31,6 +31,7 @@ const { preventCacheStampede } = require('./middleware/cacheMiddleware');
 const adversarialRoutes = require('./routes/adversarialRoutes');
 const evoMailRoutes = require('./routes/evoMailRoutes');
 const poisoningRoutes = require('./routes/poisoningRoutes');
+const saltingRoutes = require('./routes/saltingRoutes');
 
 const healthRoutes = require("./routes/healthRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
@@ -287,6 +288,7 @@ app.use("/api/reports", reportRoutes);
 app.use('/api/adversarial', adversarialRoutes);
 app.use('/api/evomail', evoMailRoutes);
 app.use('/api/poisoning', poisoningRoutes);
+app.use('/api/salting', saltingRoutes);
 
 
 
