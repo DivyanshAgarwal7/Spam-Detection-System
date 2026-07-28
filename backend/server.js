@@ -38,6 +38,7 @@ const feedbackRoutes = require('./routes/feedbackRoutes');
 const emailIntegrationRoutes = require("./routes/emailIntegrationRoutes");
 const imapRoutes = require("./routes/imapRoutes");
 const utilityRoutes = require("./routes/utilityRoutes");
+const bulkPredictRoutes = require("./routes/bulkPredict");
 
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
@@ -264,6 +265,10 @@ app.use("/", predictionRoutes);
 app.use("/", emailIntegrationRoutes);
 app.use("/", imapRoutes);
 app.use("/", utilityRoutes);
+// Mounted after predictionRoutes so predictionRoutes' existing POST /bulk-predict
+// handler keeps precedence; this only newly exposes GET /bulk-predict/template.
+// bulkPredict.js's own POST /bulk-predict route is currently shadowed as a result.
+app.use("/", bulkPredictRoutes);
 
 // Versioned routes (v1)
 app.use("/api/v1/auth", authRoutes);
