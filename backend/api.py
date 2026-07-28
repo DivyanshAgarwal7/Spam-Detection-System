@@ -106,6 +106,7 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/docs",
     "/metrics",
+    "/cache-stats",
 }
 
 
@@ -779,6 +780,17 @@ def rate_limit_status():
     )
 
 
+@app.route("/cache-stats", methods=["GET"])
+@validate_request
+def cache_stats():
+    """Observability for the /predict response cache (issue #1008).
+
+    Public (see PUBLIC_PATHS): exposes only aggregate counters (hits, misses,
+    size, evictions, hit rate) -- never any cached message content.
+    """
+    return jsonify(predict_cache.CACHE.stats())
+
+
 # ============================================
 # API DOCUMENTATION (OpenAPI 3.0 + Swagger UI)
 # ============================================
@@ -877,6 +889,20 @@ def make_prediction_response(
     return response
 
 
+def _cache_bypass_requested():
+    """True when the caller opts out of the /predict cache for this request.
+
+    Honours the standard ``Cache-Control: no-cache`` request directive and a
+    convenience ``?fresh=1`` query flag, so a client can force a fresh
+    computation (e.g. to confirm a just-reloaded model) without disabling the
+    cache process-wide.
+    """
+    if request.args.get("fresh") == "1":
+        return True
+    cache_control = request.headers.get("Cache-Control", "")
+    return "no-cache" in cache_control.lower()
+
+
 @app.route("/predict", methods=["POST"])
 @validate_request
 @validate_internal_request
@@ -962,6 +988,25 @@ def predict():
         original_text = text
         detected_language = "en"
         translated = False
+
+        # Content-addressed response cache (issue #1008). Key on the normalised
+        # input plus the live serving version, so a model hot-swap (which bumps
+        # serving_state.version) transparently invalidates every prior entry and
+        # a stale model can never serve a cached answer. Look up before any of
+        # the expensive translation / analysis / inference work below; refresh
+        # the entry on a miss (and on an explicit bypass, so a forced-fresh
+        # request also repopulates the cache).
+        cache_options = {"type": input_type}
+        cache_key = predict_cache.make_cache_key(
+            normalizer.normalize(text), serving.version, cache_options
+        )
+        cache_bypass = _cache_bypass_requested()
+        if not cache_bypass:
+            cached_body = predict_cache.CACHE.get(cache_key)
+            if cached_body is not None:
+                response = jsonify(cached_body)
+                response.headers["X-Cache"] = "HIT"
+                return response
 
         if input_type != "url" and text.strip():
             try:
@@ -1086,7 +1131,10 @@ def predict():
 
         metrics.record_prediction(result=final_output, input_type=input_type)
 
-        return jsonify(response_data)
+        predict_cache.CACHE.set(cache_key, response_data)
+        response = jsonify(response_data)
+        response.headers["X-Cache"] = "MISS"
+        return response
 
     except Exception as e:
         request_id = getattr(g, "request_id", "unknown")

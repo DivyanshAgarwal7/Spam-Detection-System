@@ -113,6 +113,28 @@ def _core_paths():
                 "summary": "Classify a message or URL",
                 "operationId": "predict",
                 "tags": ["Prediction"],
+                "description": (
+                    "Responses are served from a content-addressed cache keyed "
+                    "by the normalised input, the prediction options and the "
+                    "live model version; a model hot-swap invalidates it. Send "
+                    "`Cache-Control: no-cache` or `?fresh=1` to bypass the "
+                    "lookup and force a fresh computation. The `X-Cache` "
+                    "response header reports whether the body was served from "
+                    "cache."
+                ),
+                "parameters": [
+                    {
+                        "name": "fresh",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string", "enum": ["1"]},
+                        "description": (
+                            "Set to '1' to bypass the response cache and force "
+                            "a fresh computation (equivalent to sending "
+                            "Cache-Control: no-cache)."
+                        ),
+                    },
+                ],
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -122,11 +144,20 @@ def _core_paths():
                     },
                 },
                 "responses": {
-                    "200": _json_response(
-                        "Prediction result with confidence, URL risk and "
-                        "explanation details.",
-                        {"$ref": "#/components/schemas/PredictionResponse"},
-                    ),
+                    "200": {
+                        "description": (
+                            "Prediction result with confidence, URL risk and "
+                            "explanation details."
+                        ),
+                        "headers": {"X-Cache": _x_cache_header()},
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PredictionResponse"
+                                }
+                            }
+                        },
+                    },
                     "400": _error_response("Missing/invalid text or body."),
                     "403": _error_response("Missing or invalid internal secret."),
                     "500": _error_response("Inference error."),
@@ -530,6 +561,21 @@ def _extended_paths():
                 },
             }
         },
+        "/cache-stats": {
+            "get": {
+                "summary": "/predict response cache statistics",
+                "operationId": "getCacheStats",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Aggregate hit/miss/size counters for the /predict "
+                        "response cache (never any cached content).",
+                        {"$ref": "#/components/schemas/CacheStats"},
+                    )
+                },
+            }
+        },
         "/api/wordcloud": {
             "get": {
                 "summary": "Spam word frequencies for the word cloud",
@@ -906,6 +952,23 @@ def _extended_paths():
 
 def _extended_schemas():
     return {
+        "CacheStats": {
+            "type": "object",
+            "description": "Aggregate counters for the /predict response cache.",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "hits": {"type": "integer"},
+                "misses": {"type": "integer"},
+                "size": {"type": "integer"},
+                "max_size": {"type": "integer"},
+                "ttl_seconds": {"type": "number"},
+                "evictions": {"type": "integer"},
+                "hit_rate": {
+                    "type": "number",
+                    "description": "hits / (hits + misses), rounded to 4 dp.",
+                },
+            },
+        },
         "AuthUrlResponse": {
             "type": "object",
             "properties": {"auth_url": {"type": "string"}},
@@ -978,6 +1041,16 @@ def _json_response(description, schema):
 
 def _error_response(description):
     return _json_response(description, _ERROR)
+
+
+def _x_cache_header():
+    return {
+        "description": (
+            "Whether the body was served from the /predict response cache: "
+            "HIT (cached) or MISS (freshly computed)."
+        ),
+        "schema": {"type": "string", "enum": ["HIT", "MISS"]},
+    }
 
 
 def _query_param(name, description, required=False, schema=None):
