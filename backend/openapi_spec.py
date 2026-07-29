@@ -574,6 +574,55 @@ def _extended_paths():
                 },
             }
         },
+        "/audit": {
+            "get": {
+                "summary": "Query the tamper-evident audit trail (admin only)",
+                "operationId": "getAuditRecords",
+                "tags": ["System"],
+                "description": (
+                    "Returns persisted audit records, newest first. Requires "
+                    "the internal secret plus an admin caller identified by the "
+                    "X-User-Username and X-User-Role headers the trusted backend "
+                    "forwards. Supports exact-match filters, an inclusive "
+                    "ISO-8601 time window and limit/offset pagination."
+                ),
+                "parameters": [
+                    _query_param("actor", "Filter by the acting username."),
+                    _query_param("action", "Filter by audited action name."),
+                    _query_param("resource", "Filter by resource type."),
+                    _query_param(
+                        "since",
+                        "Inclusive lower bound on the record timestamp "
+                        "(ISO-8601 UTC).",
+                    ),
+                    _query_param(
+                        "until",
+                        "Inclusive upper bound on the record timestamp "
+                        "(ISO-8601 UTC).",
+                    ),
+                    _query_param(
+                        "limit",
+                        "Maximum records to return (clamped to 1000).",
+                        schema={"type": "integer", "default": 100},
+                    ),
+                    _query_param(
+                        "offset",
+                        "Number of records to skip for pagination.",
+                        schema={"type": "integer", "default": 0},
+                    ),
+                ],
+                "responses": {
+                    "200": _json_response(
+                        "Matching audit records plus chain-integrity status.",
+                        {"$ref": "#/components/schemas/AuditQueryResponse"},
+                    ),
+                    "401": _error_response("Missing X-User-Username header."),
+                    "403": _error_response(
+                        "Caller is not admin or lacks the internal secret."
+                    ),
+                },
+            }
+        },
         "/api/wordcloud": {
             "get": {
                 "summary": "Spam word frequencies for the word cloud",
@@ -1014,6 +1063,42 @@ def _extended_schemas():
                             "items": {"type": "string"},
                         },
                     },
+                },
+            },
+        },
+        "AuditRecord": {
+            "type": "object",
+            "description": (
+                "One persisted audit entry. `prev_hash`/`record_hash` form the "
+                "SHA-256 chain that makes the trail tamper-evident."
+            ),
+            "properties": {
+                "id": {"type": "integer"},
+                "actor": {"type": "string"},
+                "action": {"type": "string"},
+                "resource": {"type": "string"},
+                "request_id": {"type": "string"},
+                "status": {"type": "integer"},
+                "timestamp": {"type": "string", "description": "UTC ISO-8601."},
+                "prev_hash": {"type": "string"},
+                "record_hash": {"type": "string"},
+            },
+        },
+        "AuditQueryResponse": {
+            "type": "object",
+            "properties": {
+                "success": {"type": "boolean"},
+                "count": {
+                    "type": "integer",
+                    "description": "Number of records in this page.",
+                },
+                "records": {
+                    "type": "array",
+                    "items": {"$ref": "#/components/schemas/AuditRecord"},
+                },
+                "chain_intact": {
+                    "type": "boolean",
+                    "description": "Whether the stored hash chain still verifies.",
                 },
             },
         },

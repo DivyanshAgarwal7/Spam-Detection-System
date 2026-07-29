@@ -435,6 +435,23 @@ def audit_log(action, resource_type):
                 f"📝 [AUDIT] {action.__name__} - Status: {status} - User: {user}"
             )
 
+            # Persist a tamper-evident record in addition to the log line
+            # (issue #1023). Fail-soft: a store outage must never turn an
+            # otherwise-successful request into an error, so any failure is
+            # logged and swallowed here.
+            try:
+                audit_store.append(
+                    actor=user,
+                    action=getattr(action, "__name__", str(action)),
+                    resource=resource_type,
+                    request_id=request_id,
+                    status=status,
+                )
+            except Exception as audit_error:
+                app.logger.warning(
+                    f"⚠️  [AUDIT] failed to persist audit record: {audit_error}"
+                )
+
             return response
 
         return decorated_function
@@ -1626,6 +1643,54 @@ def feedback_stats():
 
 
 # ============================================
+# AUDIT TRAIL QUERY (issue #1023)
+# ============================================
+
+
+@app.route("/audit", methods=["GET"])
+@validate_request
+@validate_internal_request
+def get_audit_records():
+    """Admin-only view over the tamper-evident audit trail (issue #1023).
+
+    Gated by the same service-to-service internal secret as every other
+    privileged route; on top of that it requires the trusted backend to forward
+    the caller's authenticated identity (X-User-Username) and admin role
+    (X-User-Role), mirroring the Node admin gate. Supports exact-match filters
+    (actor, action, resource), an inclusive ISO-8601 time window (since, until)
+    and limit/offset pagination. The response also reports whether the stored
+    chain still verifies, so an operator sees integrity status alongside data.
+    """
+    username = _require_username()
+    if not username:
+        raise ApiError(
+            ErrorCode.MISSING_USERNAME, "Missing X-User-Username header", 401
+        )
+    if not _is_admin_request():
+        raise ApiError(
+            ErrorCode.FORBIDDEN, "Audit trail access requires the admin role", 403
+        )
+
+    records = audit_store.query(
+        actor=request.args.get("actor"),
+        action=request.args.get("action"),
+        resource=request.args.get("resource"),
+        since=request.args.get("since"),
+        until=request.args.get("until"),
+        limit=request.args.get("limit", default=100, type=int),
+        offset=request.args.get("offset", default=0, type=int),
+    )
+    return jsonify(
+        {
+            "success": True,
+            "count": len(records),
+            "records": records,
+            "chain_intact": audit_store.verify_chain(),
+        }
+    )
+
+
+# ============================================
 # EMAIL HEADER ANALYSIS
 # ============================================
 
@@ -1946,6 +2011,7 @@ def scan_emails_route():
 
 imap_store.init_db()
 oauth_store.init_db()
+audit_store.init_db()
 init_spam_words_db()
 scheduler = BackgroundScheduler()
 scheduler.start()
@@ -2061,6 +2127,16 @@ def _require_username():
     if not secret or not hmac.compare_digest(secret, INTERNAL_SECRET):
         return None
     return request.headers.get("X-User-Username")
+
+
+def _is_admin_request():
+    """Whether the trusted backend forwarded an admin role for this caller.
+
+    Reuses the existing X-User-* header convention and the ``admin`` role from
+    the published /api/roles vocabulary; the internal-secret gate upstream
+    guarantees the header can only originate from the trusted backend.
+    """
+    return request.headers.get("X-User-Role", "").strip().lower() == "admin"
 
 
 @app.route("/imap/connect", methods=["POST"])
