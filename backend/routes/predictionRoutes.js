@@ -4,6 +4,7 @@ const { explainPrediction } = require('../controllers/xaiController');
 const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
+const domainReputation = require('../services/domainReputation');
 const crypto = require('crypto');
 const { checkCache, setCache, redisClient } = require('../middleware/cacheMiddleware');
 const { protect } = require('../middleware/authMiddleware');
@@ -574,6 +575,37 @@ router.post("/bulk-predict", predictLimiter, protect, upload.single("file"), asy
      res.status(500).json({ error: "Something went wrong" });
    }
 });
+
+router.post('/predict', async (req, res) => {
+  try {
+    const { text, sender } = req.body;
+let domainScore = 0;
+    if (sender) {
+      const domain = sender.split('@')[1];
+      if (domain) {
+        const result = await domainReputation.checkReputation(domain);
+        domainScore = result.score;
+      }
+    }
+    
+    // Get ML prediction
+    const mlResult = await getMLPrediction(text);
+    
+    // Combine scores
+    const finalScore = (mlResult.confidence * 100 + domainScore) / 2;
+    const isSpam = finalScore > 50 || mlResult.prediction === 'spam';
+    
+    res.json({
+      prediction: isSpam ? 'spam' : 'ham',
+      confidence: finalScore,
+      domainReputation: domainScore,
+      mlConfidence: mlResult.confidence
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Prediction failed' });
+  }
+});
+
 
 router.post("/bulk-predict/export", predictLimiter, protect, upload.single("file"), async (req, res) => {
   try {
