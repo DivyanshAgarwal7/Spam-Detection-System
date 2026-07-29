@@ -56,6 +56,11 @@ class ErrorCode(StrEnum):
     TEXT_TOO_LONG = "TEXT_TOO_LONG"
     INVALID_FEEDBACK = "INVALID_FEEDBACK"
     BAD_REQUEST = "BAD_REQUEST"
+    # Aggregate code for the centralized schema validator (issue #1024): used
+    # when a request violates its declared schema and no endpoint-specific code
+    # is a better fit. The offending fields are enumerated in the response's
+    # ``violations`` list so a client sees every problem in one round trip.
+    SCHEMA_VALIDATION_FAILED = "SCHEMA_VALIDATION_FAILED"
 
     # ── Auth / access (PR 1/2) ───────────────────────────────────────────
     FORBIDDEN = "FORBIDDEN"
