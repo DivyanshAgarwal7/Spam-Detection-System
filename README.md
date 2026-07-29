@@ -75,6 +75,47 @@ TTL and LRU eviction and configured via `PREDICT_CACHE_ENABLED`,
 `PREDICT_CACHE_MAX_SIZE` and `PREDICT_CACHE_TTL_SECONDS`.
 
 ---
+## 🧾 Model Registry & Provenance
+
+The Flask ML API records **which** model bytes it is serving, so a deployed or
+hot-reloaded model can be identified and a prediction can be traced back to the
+exact artifacts that produced it (issue #1007). Fingerprints are computed by
+`backend/model_registry.py` (`build_metadata`) over the classifier `model`,
+`vectorizer` and `label_encoder`: each artifact's SHA-256, size and mtime, plus
+the optional human-authored fields (`trained_at`, `metrics`, `labels`) read from
+a `model_card.json` sitting next to the model when present.
+
+### `GET /model-info`
+
+Public (no `X-Internal-Secret` required). Reports the live model set — its
+`version` (mirrors `/model-status` and increments on every `/reload-model`), the
+per-artifact `checksums`, and the full `metadata`:
+
+```json
+{
+  "version": 3,
+  "checksums": {
+    "model": "9f2b…",
+    "vectorizer": "1c7a…",
+    "label_encoder": "e004…"
+  },
+  "metadata": {
+    "model": {"path": "…/linear_svm_model.pkl", "sha256": "9f2b…", "size_bytes": 24576, "mtime": 1753000000.0},
+    "vectorizer": {"path": "…/tfidf_vectorizer.pkl", "sha256": "1c7a…", "size_bytes": 81920, "mtime": 1753000000.0},
+    "label_encoder": {"path": "…/label_encoder.pkl", "sha256": "e004…", "size_bytes": 512, "mtime": 1753000000.0},
+    "short_checksum": "9f2b1a0c4d5e",
+    "trained_at": "2026-07-20T12:00:00Z",
+    "metrics": {"accuracy": 0.98},
+    "labels": ["ham", "spam", "smishing"]
+  }
+}
+```
+
+`metadata` is `null` when no provenance is available (e.g. a test harness that
+installs bare fakes). Dropping a `model_card.json` next to the model artifact is
+the only step needed to populate `trained_at` / `metrics` / `labels`.
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 
@@ -468,6 +509,48 @@ modified. Codes are defined in `backend/errors.py`.
 
 ---
 
+## 🪵 Logging
+
+The Flask ML API emits **structured JSON logs** (issue #1006). Logging is
+configured once at startup by `configure_logging()` in
+`backend/logging_config.py`, which installs a JSON formatter on the root logger
+so every line — including records from `app.logger` — is a single
+self-describing object rather than free-form text.
+
+Each line carries a fixed core schema plus any structured fields passed at the
+call site:
+
+```json
+{
+  "ts": "2026-07-29T09:41:03.512+00:00",
+  "level": "INFO",
+  "logger": "ml_api.access",
+  "msg": "request",
+  "request_id": "8f2c1e5b7a9d4c3e",
+  "method": "POST",
+  "path": "/predict",
+  "status": 200,
+  "latency_ms": 42.7,
+  "response_size": 1834
+}
+```
+
+* `request_id` — correlation id for the request. It is taken from the
+  `X-Request-ID` header when present; otherwise a fresh `uuid4` hex is minted in
+  `capture_request_id()` so every request is traceable (no more static
+  `unknown-ml-req`). A `RequestIdFilter` injects it onto every record and is
+  safe outside a request context (falls back to `-`).
+* **Access log** — one line per request (`logger` = `ml_api.access`, `msg` =
+  `request`) with `method`, `path`, `status`, `latency_ms`, `request_id`, and
+  `response_size`. Latency is measured from a start time stamped in the first
+  `before_request` hook, so it covers requests short-circuited (e.g. a `403`)
+  before later hooks run.
+* Use `get_logger(name)` to obtain a module logger; records flow through the
+  configured root. `configure_logging()` is idempotent, so a reimport or a test
+  that loads the app twice never double-emits.
+
+---
+
 ## 📊 Metrics & Monitoring
 
 The Flask ML API exposes a Prometheus-compatible `GET /metrics` endpoint (powered
@@ -499,6 +582,39 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:5000"]
 ```
+
+---
+
+## 🩺 Health Probes & Graceful Shutdown
+
+The Flask ML API exposes split liveness/readiness probes so an orchestrator can
+tell "restart this pod" apart from "stop routing traffic here" (issue #1009).
+All three probes are public (no `X-Internal-Secret` required).
+
+| Endpoint | Meaning | Codes |
+| --- | --- | --- |
+| `GET /health/live` | Process is up and can answer. Never depends on downstream state. | `200` always |
+| `GET /health/ready` | Safe to route traffic: serving state is loaded and the spam-words DB and rate-limit store both respond. | `200` ready, `503` otherwise |
+| `GET /health` | Backward-compatible alias of the original static probe. | `200` `{"status":"ok"}` |
+
+A ready response reports each dependency:
+
+```json
+{
+  "status": "ready",
+  "checks": { "serving_state": true, "spam_words_db": true, "rate_limit_store": true }
+}
+```
+
+When any dependency is down, `/health/ready` returns a `503` in the standard
+error envelope (`error_detail.code = "NOT_READY"`) with the per-check map so the
+failing dependency is obvious.
+
+**Graceful shutdown.** On `SIGTERM` the API enters *draining* mode:
+`/health/ready` immediately starts returning `503` (so load balancers drain the
+instance), then the process waits for in-flight requests to finish before
+exiting, bounded by `DRAIN_TIMEOUT_SECONDS` (default `25`). Liveness stays `200`
+throughout so the pod is not force-restarted mid-drain.
 
 ---
 
