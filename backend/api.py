@@ -8,7 +8,6 @@ from   flask_cors               import CORS
 from   functools                import wraps
 import hmac
 import joblib
-import json
 import metrics
 import numpy as np
 import os
@@ -797,6 +796,14 @@ FEEDBACK_FILE = OUTPUT_DIR / "feedback_store.csv"
 LOG_FILE = OUTPUT_DIR / "api.log"
 FEEDBACK_LABELS = set(label_encoder.classes_)
 
+# Point the centralized request-schema validator (issue #1024) at this
+# deployment's real limits and label classes, so the schemas the endpoints are
+# validated against match what the service actually serves.
+validation.configure(
+    max_message_length=MAX_MESSAGE_LENGTH,
+    feedback_labels=sorted(FEEDBACK_LABELS),
+)
+
 
 # ============================================
 # DISTRIBUTED TRACING
@@ -1124,82 +1131,27 @@ def make_prediction_response(
 @validate_internal_request
 @ip_allowlist
 @rate_limit(RateLimitPolicy.PREDICT)
+@validation.validate_schema("/predict")
 def predict():
     # Initialize final_output to prevent NameError/UnboundLocalError in case of early/conditional references
     final_output = None
 
     try:
-        data = request.get_json(silent=True)
+        # Body shape and the presence/type/length of ``text`` are enforced by
+        # the /predict schema (validation.py); the validated body is handed
+        # through g so we read a guaranteed non-empty string here.
+        data = getattr(g, "schema_body", None)
         if data is None:
-            raw_body = request.get_data(cache=True)
-            if raw_body:
-                # get_json(silent=True) returns None both for malformed JSON
-                # and for the valid JSON literal `null` - tell those apart so
-                # the error message doesn't call a well-formed `null` invalid.
-                try:
-                    json.loads(raw_body)
-                except ValueError:
-                    return error_response(
-                        ErrorCode.INVALID_JSON_BODY,
-                        "Request body must be a valid JSON object",
-                        400,
-                        request_id=_current_request_id(),
-                    )
-                return error_response(
-                    ErrorCode.INVALID_JSON_BODY,
-                    "Request body must be a JSON object, got NoneType",
-                    400,
-                    request_id=_current_request_id(),
-                )
-            data = {}
-        elif not isinstance(data, dict):
-            return error_response(
-                ErrorCode.INVALID_JSON_BODY,
-                f"Request body must be a JSON object, got {type(data).__name__}",
-                400,
-                request_id=_current_request_id(),
-            )
+            data = request.get_json(silent=True) or {}
 
         text = data.get("text")
         input_type = data.get("type", "message")
-
-        if text is None or (isinstance(text, str) and not text.strip()):
-            with open(LOG_FILE, "a") as f:
-                f.write(
-                    f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n"
-                )
-            return error_response(
-                ErrorCode.NO_TEXT_PROVIDED,
-                "No text provided",
-                400,
-                request_id=_current_request_id(),
-            )
-
-        if not isinstance(text, str):
-            return error_response(
-                ErrorCode.INVALID_TEXT_TYPE,
-                f"'text' must be a string, got {type(text).__name__}",
-                400,
-                request_id=_current_request_id(),
-            )
 
         # Read the live serving objects through the shared state so a
         # POST /reload-model hot-swap is picked up here without a restart
         # (#973). One snapshot per request keeps the model, vectorizer and
         # label encoder mutually consistent even if a reload lands mid-request.
         serving = serving_state.STATE.snapshot()
-
-        # Maximum-length validation before any vectorization/inference work.
-        if len(text) > MAX_MESSAGE_LENGTH:
-            return error_response(
-                ErrorCode.TEXT_TOO_LONG,
-                (
-                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
-                    f"characters (got {len(text)})"
-                ),
-                400,
-                request_id=_current_request_id(),
-            )
 
         original_text = text
         detected_language = "en"
@@ -1473,6 +1425,7 @@ def get_word_of_the_day():
 @app.route("/importance", methods=["GET"])
 @validate_request
 @validate_internal_request
+@validation.validate_schema("/importance")
 def get_feature_importance():
     try:
         top_features = [
@@ -1493,19 +1446,17 @@ def get_feature_importance():
 @app.route("/feedback", methods=["POST"])
 @validate_request
 @validate_internal_request
+@validation.validate_schema("/feedback")
 def feedback():
-    data = request.get_json(silent=True) or {}
+    # Non-empty ``text`` and a ``correct_label`` within the model's known
+    # classes are enforced by the /feedback schema (validation.py), which
+    # answers the same INVALID_FEEDBACK envelope for any bad field.
+    data = getattr(g, "schema_body", None)
+    if data is None:
+        data = request.get_json(silent=True) or {}
     text = str(data.get("text", "")).strip()
     predicted_label = str(data.get("predicted_label", "")).strip()
     correct_label = str(data.get("correct_label", "")).strip()
-
-    if not text or correct_label not in FEEDBACK_LABELS:
-        return error_response(
-            ErrorCode.INVALID_FEEDBACK,
-            "Invalid feedback data",
-            400,
-            request_id=_current_request_id(),
-        )
 
     lock_path = str(FEEDBACK_FILE) + ".lock"
 
@@ -1550,6 +1501,7 @@ def feedback():
 @app.route("/feedback/stats", methods=["GET"])
 @validate_request
 @validate_internal_request
+@validation.validate_schema("/feedback/stats")
 def feedback_stats():
     """Aggregate view of submitted feedback (issue #823): the /feedback
     endpoint has always been write-only, with no way to see what's been
@@ -1687,10 +1639,19 @@ def analyze_email_header():
 
 @app.route("/spam-insights", methods=["GET"])
 @validate_request
+@validation.validate_schema("/spam-insights")
 def get_insights():
     try:
-        limit = request.args.get("limit", default=10, type=int)
-        category = request.args.get("category", default=None, type=str)
+        # limit/category come from the /spam-insights query schema
+        # (validation.py), which coerces limit to int with the same lenient
+        # fallback the endpoint has always used.
+        query = getattr(g, "schema_query", None)
+        if query is None:
+            limit = request.args.get("limit", default=10, type=int)
+            category = request.args.get("category", default=None, type=str)
+        else:
+            limit = query.get("limit", 10)
+            category = query.get("category", None)
         from spam_insights import get_spam_insights
 
         insights = get_spam_insights(limit=limit, category=category)
