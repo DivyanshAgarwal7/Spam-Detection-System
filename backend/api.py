@@ -435,6 +435,23 @@ def audit_log(action, resource_type):
                 f"📝 [AUDIT] {action.__name__} - Status: {status} - User: {user}"
             )
 
+            # Persist a tamper-evident record in addition to the log line
+            # (issue #1023). Fail-soft: a store outage must never turn an
+            # otherwise-successful request into an error, so any failure is
+            # logged and swallowed here.
+            try:
+                audit_store.append(
+                    actor=user,
+                    action=getattr(action, "__name__", str(action)),
+                    resource=resource_type,
+                    request_id=request_id,
+                    status=status,
+                )
+            except Exception as audit_error:
+                app.logger.warning(
+                    f"⚠️  [AUDIT] failed to persist audit record: {audit_error}"
+                )
+
             return response
 
         return decorated_function
@@ -1946,6 +1963,7 @@ def scan_emails_route():
 
 imap_store.init_db()
 oauth_store.init_db()
+audit_store.init_db()
 init_spam_words_db()
 scheduler = BackgroundScheduler()
 scheduler.start()
