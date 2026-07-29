@@ -1493,6 +1493,7 @@ def get_feature_importance():
 @app.route("/feedback", methods=["POST"])
 @validate_request
 @validate_internal_request
+@idempotent
 def feedback():
     data = request.get_json(silent=True) or {}
     text = str(data.get("text", "")).strip()
@@ -1873,6 +1874,7 @@ def outlook_emails():
 @app.route("/scan-emails", methods=["POST"])
 @validate_internal_request
 @rate_limit(RateLimitPolicy.THREAT_INTEL)
+@idempotent
 def scan_emails_route():
     data = request.get_json(silent=True) or {}
     provider = data.get("provider", "").lower()

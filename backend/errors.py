@@ -75,6 +75,9 @@ class ErrorCode(StrEnum):
     # ── Readiness / graceful shutdown (issue #1009) ──────────────────────
     NOT_READY = "NOT_READY"
 
+    # ── Idempotency for mutating endpoints (issue #1022) ─────────────────
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+
     # ── Email / OAuth / IMAP provider paths (PR 2/2) ─────────────────────
     MISSING_USERNAME = "MISSING_USERNAME"
     MISSING_AUTH_CODE = "MISSING_AUTH_CODE"
