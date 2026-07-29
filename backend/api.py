@@ -74,6 +74,13 @@ settings = load_settings()
 
 app = Flask(__name__)
 
+# Install the JSON log formatter + request-id filter on the root logger before
+# anything logs, so every line (including app.logger records that propagate
+# here) is structured from the first request (#1006).
+configure_logging()
+logger = get_logger("ml_api")
+access_logger = get_logger("ml_api.access")
+
 xai_engine = ExplanationEngine()
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
 
@@ -649,7 +656,10 @@ FEEDBACK_LABELS = set(label_encoder.classes_)
 
 @app.before_request
 def capture_request_id():
-    g.request_id = request.headers.get("X-Request-ID", "unknown-ml-req")
+    # Honour a caller-supplied correlation id, but mint a fresh uuid4 when the
+    # header is absent so every request is traceable end-to-end instead of
+    # collapsing onto a single static "unknown-ml-req" bucket.
+    g.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
 
 
 # Maps the Flask endpoint that emitted a 429 to the rate-limit policy label, so
@@ -684,6 +694,29 @@ def record_request_metrics(response):
             endpoint, RateLimitPolicy.DEFAULT.value
         )
         metrics.record_rate_limit_rejection(policy)
+    return response
+
+
+@app.after_request
+def log_access(response):
+    # One structured access line per request. Latency reuses g._metrics_start,
+    # stamped by the first before_request hook so it covers even requests
+    # short-circuited (e.g. a 403) before the tracing hook could run.
+    start = getattr(g, "_metrics_start", None)
+    latency_ms = (
+        round((perf_counter() - start) * 1000, 2) if start is not None else None
+    )
+    access_logger.info(
+        "request",
+        extra={
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "latency_ms": latency_ms,
+            "request_id": getattr(g, "request_id", "-"),
+            "response_size": response.calculate_content_length(),
+        },
+    )
     return response
 
 

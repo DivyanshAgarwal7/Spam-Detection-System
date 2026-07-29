@@ -449,6 +449,48 @@ modified. Codes are defined in `backend/errors.py`.
 
 ---
 
+## 🪵 Logging
+
+The Flask ML API emits **structured JSON logs** (issue #1006). Logging is
+configured once at startup by `configure_logging()` in
+`backend/logging_config.py`, which installs a JSON formatter on the root logger
+so every line — including records from `app.logger` — is a single
+self-describing object rather than free-form text.
+
+Each line carries a fixed core schema plus any structured fields passed at the
+call site:
+
+```json
+{
+  "ts": "2026-07-29T09:41:03.512+00:00",
+  "level": "INFO",
+  "logger": "ml_api.access",
+  "msg": "request",
+  "request_id": "8f2c1e5b7a9d4c3e",
+  "method": "POST",
+  "path": "/predict",
+  "status": 200,
+  "latency_ms": 42.7,
+  "response_size": 1834
+}
+```
+
+* `request_id` — correlation id for the request. It is taken from the
+  `X-Request-ID` header when present; otherwise a fresh `uuid4` hex is minted in
+  `capture_request_id()` so every request is traceable (no more static
+  `unknown-ml-req`). A `RequestIdFilter` injects it onto every record and is
+  safe outside a request context (falls back to `-`).
+* **Access log** — one line per request (`logger` = `ml_api.access`, `msg` =
+  `request`) with `method`, `path`, `status`, `latency_ms`, `request_id`, and
+  `response_size`. Latency is measured from a start time stamped in the first
+  `before_request` hook, so it covers requests short-circuited (e.g. a `403`)
+  before later hooks run.
+* Use `get_logger(name)` to obtain a module logger; records flow through the
+  configured root. `configure_logging()` is idempotent, so a reimport or a test
+  that loads the app twice never double-emits.
+
+---
+
 ## 📊 Metrics & Monitoring
 
 The Flask ML API exposes a Prometheus-compatible `GET /metrics` endpoint (powered
