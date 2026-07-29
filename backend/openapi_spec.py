@@ -96,7 +96,7 @@ def _core_paths():
     return {
         "/health": {
             "get": {
-                "summary": "Liveness/readiness probe",
+                "summary": "Legacy health probe (alias)",
                 "operationId": "getHealth",
                 "tags": ["System"],
                 "security": [],
@@ -105,6 +105,39 @@ def _core_paths():
                         "Service is up.",
                         {"$ref": "#/components/schemas/HealthStatus"},
                     )
+                },
+            }
+        },
+        "/health/live": {
+            "get": {
+                "summary": "Liveness probe",
+                "operationId": "getHealthLive",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Process is up. Always 200 while the server runs, "
+                        "independent of downstream dependencies.",
+                        {"$ref": "#/components/schemas/HealthStatus"},
+                    )
+                },
+            }
+        },
+        "/health/ready": {
+            "get": {
+                "summary": "Readiness probe",
+                "operationId": "getHealthReady",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Serving state, spam-words DB and rate-limit store are "
+                        "all healthy.",
+                        {"$ref": "#/components/schemas/ReadinessStatus"},
+                    ),
+                    "503": _error_response(
+                        "A dependency is unavailable or the service is draining."
+                    ),
                 },
             }
         },
@@ -270,6 +303,17 @@ def _core_schemas():
         "HealthStatus": {
             "type": "object",
             "properties": {"status": {"type": "string", "example": "ok"}},
+        },
+        "ReadinessStatus": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "example": "ready"},
+                "checks": {
+                    "type": "object",
+                    "description": "Per-dependency health map.",
+                    "additionalProperties": {"type": "boolean"},
+                },
+            },
         },
         "PredictRequest": {
             "type": "object",
@@ -901,11 +945,78 @@ def _extended_paths():
                 },
             }
         },
+        "/model-info": {
+            "get": {
+                "summary": "Provenance for the currently served model",
+                "operationId": "getModelInfo",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Live model version, per-artifact checksums and the "
+                        "optional model-card metadata.",
+                        {"$ref": "#/components/schemas/ModelInfo"},
+                    )
+                },
+            }
+        },
     }
 
 
 def _extended_schemas():
     return {
+        "ArtifactInfo": {
+            "type": "object",
+            "description": "Content fingerprint of one model artifact.",
+            "properties": {
+                "path": {"type": "string"},
+                "sha256": {"type": "string"},
+                "size_bytes": {"type": "integer"},
+                "mtime": {"type": "number"},
+            },
+        },
+        "ModelInfo": {
+            "type": "object",
+            "description": (
+                "Provenance of the served model set (issue #1007). `version` "
+                "increments on each /reload-model; `checksums` maps each "
+                "artifact role to its SHA-256; `metadata` carries per-artifact "
+                "fingerprints plus the optional model-card fields, and is null "
+                "when no provenance is available."
+            ),
+            "properties": {
+                "version": {"type": "integer"},
+                "checksums": {
+                    "type": "object",
+                    "properties": {
+                        "model": {"type": "string"},
+                        "vectorizer": {"type": "string"},
+                        "label_encoder": {"type": "string"},
+                    },
+                },
+                "metadata": {
+                    "type": "object",
+                    "nullable": True,
+                    "properties": {
+                        "model": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "vectorizer": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "label_encoder": {"$ref": "#/components/schemas/ArtifactInfo"},
+                        "short_checksum": {"type": "string"},
+                        "trained_at": {"type": "string", "nullable": True},
+                        "metrics": {
+                            "type": "object",
+                            "nullable": True,
+                            "additionalProperties": True,
+                        },
+                        "labels": {
+                            "type": "array",
+                            "nullable": True,
+                            "items": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
         "AuthUrlResponse": {
             "type": "object",
             "properties": {"auth_url": {"type": "string"}},
