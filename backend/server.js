@@ -31,6 +31,7 @@ const { preventCacheStampede } = require('./middleware/cacheMiddleware');
 const adversarialRoutes = require('./routes/adversarialRoutes');
 const evoMailRoutes = require('./routes/evoMailRoutes');
 const poisoningRoutes = require('./routes/poisoningRoutes');
+const saltingRoutes = require('./routes/saltingRoutes');
 
 const healthRoutes = require("./routes/healthRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
@@ -38,6 +39,7 @@ const feedbackRoutes = require('./routes/feedbackRoutes');
 const emailIntegrationRoutes = require("./routes/emailIntegrationRoutes");
 const imapRoutes = require("./routes/imapRoutes");
 const utilityRoutes = require("./routes/utilityRoutes");
+const bulkPredictRoutes = require("./routes/bulkPredict");
 
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
@@ -264,6 +266,10 @@ app.use("/", predictionRoutes);
 app.use("/", emailIntegrationRoutes);
 app.use("/", imapRoutes);
 app.use("/", utilityRoutes);
+// Mounted after predictionRoutes so predictionRoutes' existing POST /bulk-predict
+// handler keeps precedence; this only newly exposes GET /bulk-predict/template.
+// bulkPredict.js's own POST /bulk-predict route is currently shadowed as a result.
+app.use("/", bulkPredictRoutes);
 
 // Versioned routes (v1)
 app.use("/api/v1/auth", authRoutes);
@@ -287,6 +293,7 @@ app.use("/api/reports", reportRoutes);
 app.use('/api/adversarial', adversarialRoutes);
 app.use('/api/evomail', evoMailRoutes);
 app.use('/api/poisoning', poisoningRoutes);
+app.use('/api/salting', saltingRoutes);
 
 
 

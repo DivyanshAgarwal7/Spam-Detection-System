@@ -5,8 +5,10 @@ Detects hidden text in emails using CSS techniques to evade AI security
 """
 
 import re
+import sys
 import json
 import base64
+import argparse
 from pathlib import Path
 from datetime import datetime
 import hashlib
@@ -186,7 +188,7 @@ class EmailRenderer:
             return img
             
         except Exception as e:
-            print(f"⚠️ HTML rendering failed: {e}")
+            print(f"⚠️ HTML rendering failed: {e}", file=sys.stderr)
             # Fallback: Create image with text
             return self._render_text_fallback(html)
     
@@ -245,7 +247,7 @@ class OCRTextExtractor:
             
             return text.strip()
         except Exception as e:
-            print(f"⚠️ OCR failed: {e}")
+            print(f"⚠️ OCR failed: {e}", file=sys.stderr)
             return ""
 
 
@@ -310,9 +312,10 @@ class TextSaltingDetector:
             results['recommendations'].append('Email appears to be mostly hidden text - potential salting attack')
         
         elif hidden_chars > visible_chars * self.threshold_ratio:
+            ratio = hidden_chars / (visible_chars + 1)
             results['is_suspicious'] = True
-            results['confidence'] = min(0.95, hidden_chars / (visible_chars + 1))
-            results['analysis']['reason'] = f'Hidden text ({hidden_chars} chars) exceeds visible text ({visible_chars} chars) by {hidden_chars/visible_chars:.1f}x'
+            results['confidence'] = min(0.95, ratio)
+            results['analysis']['reason'] = f'Hidden text ({hidden_chars} chars) exceeds visible text ({visible_chars} chars) by {ratio:.1f}x'
             results['recommendations'].append('Significant text salting detected - hidden content used to dilute spam signals')
         
         elif hidden_chars > 0 and hidden_chars < visible_chars * 0.5:
@@ -508,5 +511,70 @@ def main():
     return detector
 
 
+def _command_detect(detector, params):
+    html = params.get("html")
+    if not isinstance(html, str) or not html.strip():
+        raise ValueError("Parameter 'html' is required and must be a non-empty string")
+    return detector.detect(html)
+
+
+def _command_status(_detector):
+    return {
+        "ready": True,
+        "outputDir": str(OUTPUT_DIR),
+    }
+
+
+def _emit(payload):
+    """Write a single JSON object to stdout for the calling Express process.
+    All diagnostics (render/OCR warnings) go to stderr instead of print()'s
+    default stdout so this is always the only thing on stdout."""
+    sys.stdout.write(json.dumps(payload, default=str))
+    sys.stdout.flush()
+
+
+def run_cli(argv=None):
+    parser = argparse.ArgumentParser(description="Text Salting Defense CLI")
+    parser.add_argument(
+        "--command",
+        choices=["detect", "status"],
+        help="Operation to run. Omit to run the interactive demo.",
+    )
+    parser.add_argument(
+        "--params",
+        default="{}",
+        help="JSON-encoded parameters for the command.",
+    )
+    args = parser.parse_args(argv)
+
+    # No command -> preserve the original demo behaviour when run directly.
+    if args.command is None:
+        main()
+        return 0
+
+    try:
+        params = json.loads(args.params)
+    except json.JSONDecodeError as error:
+        _emit({"success": False, "command": args.command, "error": f"Invalid --params JSON: {error}"})
+        return 1
+    if not isinstance(params, dict):
+        _emit({"success": False, "command": args.command, "error": "--params must be a JSON object"})
+        return 1
+
+    try:
+        detector = TextSaltingDetector()
+        if args.command == "detect":
+            result = _command_detect(detector, params)
+        else:
+            result = _command_status(detector)
+    except Exception as error:  # surfaced to Express via stderr + non-zero exit
+        print(f"{args.command} failed: {error}", file=sys.stderr)
+        _emit({"success": False, "command": args.command, "error": str(error)})
+        return 1
+
+    _emit({"success": True, "command": args.command, **result})
+    return 0
+
+
 if __name__ == "__main__":
-    detector = main()
+    sys.exit(run_cli())

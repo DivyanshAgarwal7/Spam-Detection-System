@@ -503,6 +503,48 @@ modified. Codes are defined in `backend/errors.py`.
 
 ---
 
+## 🪵 Logging
+
+The Flask ML API emits **structured JSON logs** (issue #1006). Logging is
+configured once at startup by `configure_logging()` in
+`backend/logging_config.py`, which installs a JSON formatter on the root logger
+so every line — including records from `app.logger` — is a single
+self-describing object rather than free-form text.
+
+Each line carries a fixed core schema plus any structured fields passed at the
+call site:
+
+```json
+{
+  "ts": "2026-07-29T09:41:03.512+00:00",
+  "level": "INFO",
+  "logger": "ml_api.access",
+  "msg": "request",
+  "request_id": "8f2c1e5b7a9d4c3e",
+  "method": "POST",
+  "path": "/predict",
+  "status": 200,
+  "latency_ms": 42.7,
+  "response_size": 1834
+}
+```
+
+* `request_id` — correlation id for the request. It is taken from the
+  `X-Request-ID` header when present; otherwise a fresh `uuid4` hex is minted in
+  `capture_request_id()` so every request is traceable (no more static
+  `unknown-ml-req`). A `RequestIdFilter` injects it onto every record and is
+  safe outside a request context (falls back to `-`).
+* **Access log** — one line per request (`logger` = `ml_api.access`, `msg` =
+  `request`) with `method`, `path`, `status`, `latency_ms`, `request_id`, and
+  `response_size`. Latency is measured from a start time stamped in the first
+  `before_request` hook, so it covers requests short-circuited (e.g. a `403`)
+  before later hooks run.
+* Use `get_logger(name)` to obtain a module logger; records flow through the
+  configured root. `configure_logging()` is idempotent, so a reimport or a test
+  that loads the app twice never double-emits.
+
+---
+
 ## 📊 Metrics & Monitoring
 
 The Flask ML API exposes a Prometheus-compatible `GET /metrics` endpoint (powered
@@ -534,6 +576,39 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:5000"]
 ```
+
+---
+
+## 🩺 Health Probes & Graceful Shutdown
+
+The Flask ML API exposes split liveness/readiness probes so an orchestrator can
+tell "restart this pod" apart from "stop routing traffic here" (issue #1009).
+All three probes are public (no `X-Internal-Secret` required).
+
+| Endpoint | Meaning | Codes |
+| --- | --- | --- |
+| `GET /health/live` | Process is up and can answer. Never depends on downstream state. | `200` always |
+| `GET /health/ready` | Safe to route traffic: serving state is loaded and the spam-words DB and rate-limit store both respond. | `200` ready, `503` otherwise |
+| `GET /health` | Backward-compatible alias of the original static probe. | `200` `{"status":"ok"}` |
+
+A ready response reports each dependency:
+
+```json
+{
+  "status": "ready",
+  "checks": { "serving_state": true, "spam_words_db": true, "rate_limit_store": true }
+}
+```
+
+When any dependency is down, `/health/ready` returns a `503` in the standard
+error envelope (`error_detail.code = "NOT_READY"`) with the per-check map so the
+failing dependency is obvious.
+
+**Graceful shutdown.** On `SIGTERM` the API enters *draining* mode:
+`/health/ready` immediately starts returning `503` (so load balancers drain the
+instance), then the process waits for in-flight requests to finish before
+exiting, bounded by `DRAIN_TIMEOUT_SECONDS` (default `25`). Liveness stays `200`
+throughout so the pod is not force-restarted mid-drain.
 
 ---
 

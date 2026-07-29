@@ -74,6 +74,13 @@ settings = load_settings()
 
 app = Flask(__name__)
 
+# Install the JSON log formatter + request-id filter on the root logger before
+# anything logs, so every line (including app.logger records that propagate
+# here) is structured from the first request (#1006).
+configure_logging()
+logger = get_logger("ml_api")
+access_logger = get_logger("ml_api.access")
+
 xai_engine = ExplanationEngine()
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
 
@@ -101,6 +108,8 @@ INTERNAL_SECRET = settings.internal_secret
 PUBLIC_PATHS = {
     "/",
     "/health",
+    "/health/live",
+    "/health/ready",
     "/api/roles",
     "/api/rate-limit-status",
     "/openapi.json",
@@ -108,6 +117,137 @@ PUBLIC_PATHS = {
     "/metrics",
     "/model-info",
 }
+
+
+# ============================================
+# HEALTH PROBES & GRACEFUL SHUTDOWN (issue #1009)
+# ============================================
+
+# Split Kubernetes-style probes: /health/live answers "is the process up?"
+# (restart me if not) and never depends on downstream state, while
+# /health/ready answers "should traffic reach me?" -- an unhealthy dependency
+# or an in-progress drain pulls the instance out of the load-balancer rotation
+# without the orchestrator killing it. /health stays a static alias so existing
+# monitors and the Docker smoke test keep working unchanged.
+
+_inflight_lock = threading.Lock()
+_inflight_requests = 0
+
+# Flipped by begin_drain() on SIGTERM so readiness starts failing and load
+# balancers stop routing new traffic while in-flight work finishes. Read
+# directly by /health/ready and exposed at module scope so shutdown behaviour is
+# testable without raising a real signal.
+draining = False
+
+# Upper bound (seconds) on how long a drain waits for in-flight requests to
+# finish before the process exits regardless, so one stuck request cannot block
+# shutdown forever. Tunable per deployment SLA.
+DRAIN_TIMEOUT_SECONDS = float(os.getenv("DRAIN_TIMEOUT_SECONDS", "25"))
+
+
+def _increment_inflight():
+    global _inflight_requests
+    with _inflight_lock:
+        _inflight_requests += 1
+
+
+def _decrement_inflight():
+    global _inflight_requests
+    with _inflight_lock:
+        # Clamp at zero so an unmatched decrement can never drive the counter
+        # negative and stall the drain wait.
+        if _inflight_requests > 0:
+            _inflight_requests -= 1
+
+
+def inflight_requests():
+    """Number of requests currently being served (thread-safe read)."""
+    with _inflight_lock:
+        return _inflight_requests
+
+
+def begin_drain():
+    """Enter draining mode so /health/ready returns 503.
+
+    Kept separate from the signal handler so the drain transition can be
+    exercised in tests without sending SIGTERM.
+    """
+    global draining
+    draining = True
+
+
+def _await_inflight_drained(timeout):
+    """Block until no requests are in flight or ``timeout`` seconds elapse."""
+    deadline = perf_counter() + timeout
+    while inflight_requests() > 0 and perf_counter() < deadline:
+        time.sleep(0.05)
+    return inflight_requests() == 0
+
+
+def _rate_limit_store_ok():
+    """True when the rate-limit storage backend answers a health check."""
+    try:
+        storage = getattr(limiter, "storage", None) or getattr(
+            limiter, "_storage", None
+        )
+        if storage is None:
+            return False
+        return bool(storage.check())
+    except Exception:
+        return False
+
+
+def _readiness_checks():
+    """Probe each serving dependency, returning a ``{name: healthy}`` map.
+
+    Every probe is individually wrapped: a raising dependency is reported as
+    unhealthy rather than surfacing a 500 out of the readiness endpoint.
+    """
+    checks = {}
+
+    state = serving_state.STATE
+    if state is None:
+        checks["serving_state"] = False
+    else:
+        try:
+            state.snapshot()
+            checks["serving_state"] = True
+        except Exception:
+            checks["serving_state"] = False
+
+    try:
+        with imap_store.get_db_connection() as conn:
+            conn.execute("SELECT 1")
+        checks["spam_words_db"] = True
+    except Exception:
+        checks["spam_words_db"] = False
+
+    checks["rate_limit_store"] = _rate_limit_store_ok()
+    return checks
+
+
+def _handle_sigterm(_signum, _frame):
+    app.logger.info("SIGTERM received; draining before shutdown.")
+    begin_drain()
+    _await_inflight_drained(DRAIN_TIMEOUT_SECONDS)
+    # os._exit skips finalizers we don't need here and guarantees termination
+    # even if a lingering non-daemon thread would otherwise hold the process up.
+    os._exit(0)
+
+
+def _install_sigterm_handler():
+    """Register the SIGTERM drain handler, but only as the running server.
+
+    signal.signal() only works in the main thread of the main interpreter, so
+    this is a no-op elsewhere (WSGI worker threads, the test harness), where the
+    orchestrator or runner owns process lifecycle instead.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except (ValueError, OSError):
+        pass
 
 
 # ============================================
@@ -166,6 +306,9 @@ def require_internal_secret():
     # is measured for every request, including ones this hook short-circuits
     # with a 403 before later before_request hooks can run.
     g._metrics_start = perf_counter()
+    # Count every accepted request (before any short-circuit below) so the
+    # graceful-shutdown drain knows how much work is still in flight.
+    _increment_inflight()
     if app.config.get("TESTING") and not app.config.get("ENFORCE_INTERNAL_SECRET"):
         return None
     if request.method == "OPTIONS":
@@ -662,7 +805,10 @@ FEEDBACK_LABELS = set(label_encoder.classes_)
 
 @app.before_request
 def capture_request_id():
-    g.request_id = request.headers.get("X-Request-ID", "unknown-ml-req")
+    # Honour a caller-supplied correlation id, but mint a fresh uuid4 when the
+    # header is absent so every request is traceable end-to-end instead of
+    # collapsing onto a single static "unknown-ml-req" bucket.
+    g.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
 
 
 # Maps the Flask endpoint that emitted a 429 to the rate-limit policy label, so
@@ -681,6 +827,9 @@ _RATE_LIMIT_POLICY_BY_ENDPOINT = {
 
 @app.after_request
 def record_request_metrics(response):
+    # Balances the before_request increment; runs for every response, including
+    # the ones earlier hooks short-circuit with a 403.
+    _decrement_inflight()
     endpoint = request.endpoint or "unknown"
     start = getattr(g, "_metrics_start", None)
     latency = perf_counter() - start if start is not None else 0.0
@@ -700,6 +849,29 @@ def record_request_metrics(response):
     return response
 
 
+@app.after_request
+def log_access(response):
+    # One structured access line per request. Latency reuses g._metrics_start,
+    # stamped by the first before_request hook so it covers even requests
+    # short-circuited (e.g. a 403) before the tracing hook could run.
+    start = getattr(g, "_metrics_start", None)
+    latency_ms = (
+        round((perf_counter() - start) * 1000, 2) if start is not None else None
+    )
+    access_logger.info(
+        "request",
+        extra={
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "latency_ms": latency_ms,
+            "request_id": getattr(g, "request_id", "-"),
+            "response_size": response.calculate_content_length(),
+        },
+    )
+    return response
+
+
 # ============================================
 # PUBLIC ROUTES
 # ============================================
@@ -714,7 +886,44 @@ def home():
 @app.route("/health")
 @validate_request
 def health():
+    # Backward-compatible alias of the original static probe (issue #1009):
+    # body and behaviour are unchanged so existing monitors keep working.
     return jsonify({"status": "ok"})
+
+
+@app.route("/health/live")
+def health_live():
+    # Liveness (issue #1009): the process is up and can answer. Always 200 --
+    # a failing dependency must not trigger a restart (that is readiness' job),
+    # only stop traffic being routed here.
+    return jsonify({"status": "alive"})
+
+
+@app.route("/health/ready")
+def health_ready():
+    # Readiness (issue #1009): 200 only when the app can actually serve.
+    # Draining or any unhealthy dependency returns a 503 error envelope so load
+    # balancers route elsewhere.
+    if draining:
+        return error_response(
+            ErrorCode.NOT_READY,
+            "Service is draining",
+            503,
+            request_id=_current_request_id(),
+            extra={"status": "draining", "checks": {}},
+        )
+
+    checks = _readiness_checks()
+    if all(checks.values()):
+        return jsonify({"status": "ready", "checks": checks})
+
+    return error_response(
+        ErrorCode.NOT_READY,
+        "Service not ready",
+        503,
+        request_id=_current_request_id(),
+        extra={"status": "not ready", "checks": checks},
+    )
 
 
 @app.route("/metrics")
@@ -1954,6 +2163,10 @@ if __name__ == "__main__":
             f"'{settings.flask_host}'. The interactive debugger must never be "
             "exposed on a non-loopback interface."
         )
+
+    # Registered only on the real server run (main thread), so SIGTERM triggers
+    # a graceful drain instead of an abrupt kill (issue #1009).
+    _install_sigterm_handler()
 
     app.run(
         host=settings.flask_host,
