@@ -5,7 +5,7 @@ const { checkPermission } = require('../middleware/zeroTrust');
 const { spawn } = require('child_process');
 const path = require('path');
 
-const SALTING_SCRIPT = path.join(__dirname, '../text_salting_detector.js');
+const SALTING_SCRIPT = path.join(__dirname, '../text_salting_detector.py');
 
 router.post('/detect', protect, async (req, res) => {
     try {
