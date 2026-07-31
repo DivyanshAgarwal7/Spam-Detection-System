@@ -11,14 +11,18 @@ DB_PATH = os.getenv(
 ALLOWED_INTERVALS = (15, 30, 60)
 
 
-def _connection():
-    conn = sqlite3.connect(DB_PATH)
+def get_db_connection(db_path=None):
+    path = db_path if db_path is not None else DB_PATH
+    conn = sqlite3.connect(path, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
 def init_db():
-    with _connection() as conn:
+    with get_db_connection() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS imap_connections (
@@ -67,7 +71,7 @@ def init_db():
 
 def save_connection(username, host, port, imap_username, encrypted_password, scan_interval_minutes):
     now = datetime.now(timezone.utc).isoformat()
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute(
             """
             INSERT INTO imap_connections
@@ -86,7 +90,7 @@ def save_connection(username, host, port, imap_username, encrypted_password, sca
 
 
 def get_connection(username):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         row = conn.execute(
             "SELECT * FROM imap_connections WHERE username = ?", (username,)
         ).fetchone()
@@ -94,13 +98,13 @@ def get_connection(username):
 
 
 def get_all_active_connections():
-    with _connection() as conn:
+    with get_db_connection() as conn:
         rows = conn.execute("SELECT * FROM imap_connections").fetchall()
         return [dict(row) for row in rows]
 
 
 def update_schedule(username, scan_interval_minutes):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute(
             "UPDATE imap_connections SET scan_interval_minutes = ? WHERE username = ?",
             (scan_interval_minutes, username),
@@ -110,7 +114,7 @@ def update_schedule(username, scan_interval_minutes):
 
 def update_last_scan(username):
     now = datetime.now(timezone.utc).isoformat()
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute(
             "UPDATE imap_connections SET last_scan_at = ? WHERE username = ?",
             (now, username),
@@ -120,7 +124,7 @@ def update_last_scan(username):
 
 
 def delete_connection(username):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         conn.execute("DELETE FROM imap_connections WHERE username = ?", (username,))
         conn.execute("DELETE FROM imap_scan_results WHERE username = ?", (username,))
         conn.commit()
@@ -130,7 +134,7 @@ def save_scan_results(username, scanned_emails):
     if not scanned_emails:
         return
     now = datetime.now(timezone.utc).isoformat()
-    with _connection() as conn:
+    with get_db_connection() as conn:
         # Fetch existing message IDs to deduplicate
         message_ids = [e.get("id") for e in scanned_emails if e.get("id")]
         existing = set()
@@ -175,7 +179,7 @@ def save_scan_results(username, scanned_emails):
 
 
 def get_scan_history(username, limit=100, offset=0):
-    with _connection() as conn:
+    with get_db_connection() as conn:
         rows = conn.execute(
             """
             SELECT * FROM imap_scan_results

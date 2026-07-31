@@ -8,6 +8,7 @@ const path = require('path');
 const sharp = require('sharp');
 const BlacklistedToken = require('../models/BlacklistedToken');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const emailTransporter = require('../utils/emailTransporter');
 
 // ============================================
 // TOKEN GENERATION
@@ -28,6 +29,7 @@ const buildAuthResponse = (user, token) => ({
     avatarUrl: user.avatarUrl,
     provider: user.provider,
     role: user.role || 'user',
+    permissions: user.permissions || [],
   },
 });
 
@@ -35,8 +37,6 @@ const buildAuthResponse = (user, token) => ({
 // AUTH CONTROLLERS
 // ============================================
 
-// @desc    Register user
-// @route   POST /api/auth/register
 const register = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -76,8 +76,6 @@ const register = async (req, res) => {
   }
 };
 
-// @desc    Login user
-// @route   POST /api/auth/login
 const login = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -99,9 +97,26 @@ const login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
+    // Check if account is locked
+    if (user.isLocked && user.isLocked()) {
+      return res.status(429).json({
+        success: false,
+        error: 'Account locked due to too many failed attempts. Please try again later.'
+      });
+    }
+
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      // Increment login attempts
+      if (user.incrementLoginAttempts) {
+        await user.incrementLoginAttempts();
+      }
       return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Reset login attempts on success
+    if (user.updateLastLogin) {
+      await user.updateLastLogin();
     }
 
     const token = generateToken(user._id);
@@ -150,8 +165,6 @@ const logout = async (req, res) => {
   }
 };
 
-// @desc    Get current user
-// @route   GET /api/auth/me
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -162,8 +175,6 @@ const getMe = async (req, res) => {
   }
 };
 
-// @desc    Google OAuth login
-// @route   POST /api/auth/google
 const googleLogin = async (req, res) => {
   try {
     const { idToken } = req.body;
@@ -177,11 +188,36 @@ const googleLogin = async (req, res) => {
     });
 
     const payload = ticket.getPayload();
+
+    if (!payload) {
+      return res.status(400).json({ error: 'Invalid Google token payload.' });
+    }
+    // 1. Email must be verified by Google
+    if (!payload.email_verified) {
+      return res.status(400).json({ error: 'Google email is not verified. Please verify your email on Google.' });
+    }
+    // 2. Issuer must be exactly Google's trusted issuer
+    const allowedIssuers = ['https://accounts.google.com', 'accounts.google.com'];
+    if (!allowedIssuers.includes(payload.iss)) {
+      return res.status(400).json({ error: `Invalid token issuer: ${payload.iss}` });
+    }
+    // 3. Audience must match our Client ID (Security check)
+    if (payload.aud !== process.env.GOOGLE_CLIENT_ID) {
+      return res.status(400).json({ error: 'Invalid token audience.' });
+    }
+    // 4. Subject (unique Google ID) must exist
+    if (!payload.sub) {
+      return res.status(400).json({ error: 'Missing subject (sub) in Google token.' });
+    }
+    // ==========================================
+
     const { sub: googleId, email, name, picture } = payload;
 
+    // Pehle check karo ki user exist karta hai ya nahi
     let user = await User.findOne({ email });
 
     if (user) {
+      // Agar user already exist karta hai toh usko update karo
       if (!user.googleId) {
         user.googleId = googleId;
         user.provider = 'google';
@@ -191,34 +227,48 @@ const googleLogin = async (req, res) => {
         await user.save();
       }
     } else {
+      // ==========================================
+      // 🔥 NEW CONCURRENCY-SAFE LOGIC (Try -> Catch -> Retry)
+      // ==========================================
+      const MAX_RETRIES = 10;
+      let suffix = 0;
+
+      // Base username banao (e.g. "John Doe" -> "johndoe")
       let baseUsername = name ? name.replace(/\s+/g, '').toLowerCase() : email.split('@')[0];
-      let username = baseUsername;
+      let userCreated = false;
 
-      const regex = new RegExp(`^${baseUsername}(\\d*)$`);
-      const existingUsers = await User.find({ username: regex }).select('username').lean();
+      // Loop tab tak chalega jab tak user create na ho jaye, ya max retries khatam na ho jayein
+      while (!userCreated && suffix <= MAX_RETRIES) {
+        // Final username decide karo (suffix 0 par sirf base name, warna suffix laga do)
+        const username = suffix === 0 ? baseUsername : `${baseUsername}${suffix}`;
 
-      if (existingUsers.length > 0) {
-        const exactMatch = existingUsers.find(u => u.username === baseUsername);
-        if (exactMatch) {
-          let maxCounter = 0;
-          existingUsers.forEach(u => {
-            const match = u.username.match(regex);
-            if (match && match[1]) {
-              const num = parseInt(match[1]);
-              if (num > maxCounter) maxCounter = num;
-            }
+        try {
+          // 🔥 IMPORTANT: Direct CREATE attempt karo. Pehle Check (find) mat karo!
+          user = await User.create({
+            username,
+            email,
+            googleId,
+            avatarUrl: picture,
+            provider: 'google',
           });
-          username = `${baseUsername}${maxCounter + 1}`;
+          userCreated = true; // Success! Loop break ho jayega
+
+        } catch (err) {
+          // Agar error MongoDB ka Duplicate Key (Error Code 11000) hai
+          if (err.code === 11000 && err.keyPattern?.username) {
+            suffix++; // Suffix badhao aur dobara loop chalao (Retry)
+            console.log(`⚠️ Username collision for ${username}. Retrying with ${baseUsername}${suffix}`);
+          } else {
+            throw err; // Agar koi aur error hai (DB connection failure etc.), toh usko throw kar do
+          }
         }
       }
 
-      user = await User.create({
-        username,
-        email,
-        googleId,
-        avatarUrl: picture,
-        provider: 'google',
-      });
+      // Agar 10 baar retry ke baad bhi fail ho jaye
+      if (!userCreated) {
+        throw new Error(`Failed to generate unique username for ${baseUsername} after ${MAX_RETRIES} attempts.`);
+      }
+      // ==========================================
     }
 
     const token = generateToken(user._id);
@@ -229,17 +279,35 @@ const googleLogin = async (req, res) => {
     });
   } catch (err) {
     console.error('Google Auth Error:', err);
-    res.status(400).json({ error: 'Invalid Google token.' });
+    res.status(400).json({ error: 'Invalid Google token or authentication failed.' });
   }
 };
-
-// @desc    Update user avatar
-// @route   POST /api/auth/avatar
 const updateAvatar = async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
+
+    const metadata = await sharp(req.file.buffer).metadata();
+    const MIN_DIMENSION = 100;  // Minimum 100x100 pixels
+    const MAX_DIMENSION = 4096; // Maximum 4096x4096 pixels (4K)
+
+    if (!metadata.width || !metadata.height) {
+      return res.status(400).json({ error: 'Unable to read image metadata. File might be corrupted.' });
+    }
+
+    if (metadata.width < MIN_DIMENSION || metadata.height < MIN_DIMENSION) {
+      return res.status(400).json({
+        error: `Avatar image is too small. Minimum allowed dimensions are ${MIN_DIMENSION}x${MIN_DIMENSION} pixels.`
+      });
+    }
+
+    if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
+      return res.status(400).json({
+        error: `Avatar image is too large. Maximum allowed dimensions are ${MAX_DIMENSION}x${MAX_DIMENSION} pixels.`
+      });
+    }
+    // ==========================================
 
     const filename = `${req.user.id}-${Date.now()}.webp`;
     const filepath = path.join(__dirname, '..', 'uploads', filename);
@@ -282,8 +350,6 @@ const updateAvatar = async (req, res) => {
   }
 };
 
-// @desc    Forgot password - Send reset link
-// @route   POST /api/auth/forgot-password
 const forgotPassword = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -299,27 +365,19 @@ const forgotPassword = async (req, res) => {
 
     const secret = process.env.JWT_SECRET + user.password;
     const token = jwt.sign(
-      { id: user._id, email: user.email }, 
-      secret, 
+      { id: user._id, email: user.email },
+      secret,
       { expiresIn: process.env.PASSWORD_RESET_TOKEN_EXPIRES || '15m' }
     );
 
     const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
     const resetLink = `${clientUrl}/reset-password/${user._id}/${token}`;
 
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.ethereal.email',
-      port: process.env.EMAIL_PORT || 587,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
     const emailFrom = process.env.EMAIL_FROM || '"Spam Detection System" <noreply@spamdetection.local>';
 
     if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      await transporter.sendMail({
+      // 🔥 UPDATED: Using the centralized transporter instead of creating a new one
+      await emailTransporter.sendMail({
         from: emailFrom,
         to: user.email,
         subject: 'Password Reset Request',
@@ -336,8 +394,6 @@ const forgotPassword = async (req, res) => {
   }
 };
 
-// @desc    Reset password
-// @route   POST /api/auth/reset-password/:id/:token
 const resetPassword = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -363,6 +419,19 @@ const resetPassword = async (req, res) => {
     user.password = password;
     await user.save();
 
+    // ==========================================
+    // 🔥 NEW: EXPLICITLY INVALIDATE RESET TOKEN
+    // (Single-use token policy)
+    // ==========================================
+    await BlacklistedToken.blacklist(
+      token,
+      user._id,
+      'PASSWORD_RESET_USED',
+      req.ip || req.connection?.remoteAddress,
+      req.headers['user-agent']
+    );
+    // ==========================================
+
     res.json({ message: 'Password has been successfully reset. You can now login.' });
   } catch (err) {
     console.error('Reset password error:', err);
@@ -370,8 +439,6 @@ const resetPassword = async (req, res) => {
   }
 };
 
-// @desc    Change password (authenticated)
-// @route   POST /api/auth/change-password
 const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -430,8 +497,6 @@ const changePassword = async (req, res) => {
   }
 };
 
-// @desc    Update webhook URL
-// @route   PUT /api/auth/webhook
 const updateWebhook = async (req, res) => {
   try {
     const { webhookUrl } = req.body;
@@ -458,13 +523,7 @@ const updateWebhook = async (req, res) => {
   }
 };
 
-
-// @desc    Get user's session status
-// @route   GET /api/auth/session-status
 const getSessionStatus = async (req, res) => {
-
-const logout = async (req, res) => {
-
   try {
     const token = req.token;
     const decoded = jwt.decode(token);
@@ -486,9 +545,138 @@ const logout = async (req, res) => {
   }
 };
 
+// ============================================
+
+// ZERO TRUST - ROLE MANAGEMENT
+// ============================================
+
+// @desc    Assign role to user (Admin only)
+// @route   POST /api/auth/admin/assign-role
+const assignRole = async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+
+    if (!userId || !role) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId and role are required'
+      });
+    }
+
+    const validRoles = ['user', 'moderator', 'admin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid role. Must be one of: ${validRoles.join(', ')}`
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Check if requester has permission
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required to assign roles'
+      });
+    }
+
+    // Update user role (permissions auto-assigned via pre-save hook)
+    user.role = role;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Role '${role}' assigned successfully to ${user.email}`,
+      user: {
+        id: user._id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        permissions: user.permissions
+      }
+    });
+  } catch (err) {
+    console.error('Assign role error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to assign role'
+    });
+  }
+};
+
+// @desc    Get user's permissions (Admin only)
+// @route   GET /api/auth/admin/user-permissions/:userId
+const getUserPermissions = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Admin access required'
+      });
+    }
+
+    const user = await User.findById(userId).select('email username role permissions');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+        permissions: user.permissions
+      }
+    });
+  } catch (err) {
+    console.error('Get user permissions error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get user permissions'
+    });
+  }
+};
+
+// @desc    Get all roles and permissions (Public)
+// @route   GET /api/auth/roles
+const getRolesAndPermissions = async (req, res) => {
+  try {
+    const roles = User.getRoles ? User.getRoles() : ['user', 'moderator', 'admin'];
+    const permissions = User.getPermissions ? User.getPermissions() : [];
+
+    res.json({
+      success: true,
+      roles: roles,
+      permissions: permissions,
+      rolePermissions: User.ROLE_PERMISSIONS || {}
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get roles and permissions'
+    });
+  }
+};
 
 // ============================================
 // 📌 EXPORTS - ONLY ONCE AT THE VERY END
+
+// EXPORTS
+
 // ============================================
 
 module.exports = { 
@@ -502,10 +690,11 @@ module.exports = {
   resetPassword,
   changePassword,
   updateWebhook,
+
   getSessionStatus,
+  assignRole,
+  getUserPermissions,
+  getRolesAndPermissions,
   generateToken,
   buildAuthResponse
 };
-
-module.exports = { register, login, logout, getMe, googleLogin, updateAvatar, forgotPassword, resetPassword, updateWebhook };
-

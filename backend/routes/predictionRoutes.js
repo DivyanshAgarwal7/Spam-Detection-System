@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { explainPrediction } = require('../controllers/xaiController');
 const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
+const domainReputation = require('../services/domainReputation');
 const crypto = require('crypto');
 const { checkCache, setCache, redisClient } = require('../middleware/cacheMiddleware');
 const { protect } = require('../middleware/authMiddleware');
@@ -15,7 +17,10 @@ const Rule = require('../models/Rule');
 const User = require('../models/User');
 const SenderReputation = require('../models/SenderReputation');
 const { matchKeywordRule } = require('../utils/keywordRules');
+const { evaluateAdminRules } = require('../utils/adminRuleEvaluator');
 const upload = multer();
+const { mlCircuitBreaker } = require('../utils/circuitBreaker');
+const { getFallbackPrediction } = require('../utils/fallbackDetector');
 
 // Helper to dispatch webhook
 const dispatchWebhook = require('../utils/dispatchWebhook'); // Aapko dispatchWebhook ko bhi alag file mein nikalna padega
@@ -193,11 +198,49 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
        return res.json(kwResult);
      }
  
+     // ---> NEW: Check Admin Override Rules
+     const adminOverride = evaluateAdminRules(text);
+     if (adminOverride && adminOverride.matched) {
+       const isSpam = ["spam", "malicious", "smishing"].includes(adminOverride.action);
+       
+       // Save history for admin rule match
+       try {
+         await History.create({
+           user: req.user.id,
+           query: text,
+           prediction: adminOverride.action,
+           type: type,
+           confidence: 1.0,
+         });
+       } catch (historyError) {
+         console.error("Failed to save history for admin rule match:", historyError.message);
+       }
+       
+       console.log(`Admin override matched:`, adminOverride.description);
+       
+       return res.json({
+         input: text,
+         prediction: adminOverride.action,
+         result: adminOverride.action,
+         confidence: 1.0,
+         confidence_score: 100.0,
+         decision_score: null,
+         confidence_level: "high",
+         level_color: isSpam ? "red" : "green",
+         level_emoji: isSpam ? "🔴" : "🟢",
+         rule_applied: "admin_override",
+         explanation: `Matched admin override rule: ${adminOverride.description}`,
+         meta: {
+           source: adminOverride.source,
+           ruleId: adminOverride.ruleId
+         }
+       });
+     }
+
      console.log("Calling Flask...");
  
      // Check ML Cache globally before calling Flask
      const cacheKey = `spam_cache:${require('crypto').createHash('sha256').update(text).digest('hex')}`;
-     const { redisClient } = require("./middleware/cacheMiddleware");
      if (redisClient && redisClient.status === 'ready') {
        try {
          const cachedResult = await redisClient.get(cacheKey);
@@ -218,7 +261,8 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
      apiUrl = apiUrl.replace(/\/predict\/?$/, "").replace(/\/$/, "") + "/predict";
  
      console.time("ML_API_CALL");
-     const response = await axios.post(
+     
+     const requestFn = () => axios.post(
        apiUrl,
        {
          text: text.trim(),
@@ -233,23 +277,33 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
          timeout: Number(process.env.ML_API_TIMEOUT_MS) || 15000
        }
      );
+
+     const fallbackFn = (error) => {
+       console.warn(`[${req.requestId}] Circuit breaker fallback triggered. Error: ${error.message}`);
+       return { data: getFallbackPrediction(text, type) };
+     };
+
+     const response = await mlCircuitBreaker.fire(requestFn, fallbackFn);
+     
      console.timeEnd("ML_API_CALL");
      console.log("Flask responded:", response.data);
  
-     // Save history automatically (best-effort)
-     try {
-       await History.create({
-         user: req.user.id,
-         query: text,
-         prediction: response.data.prediction,
-         type: type,
-         confidence: response.data.confidence || response.data.probability,
-       });
-     } catch (historyError) {
-       console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
-     }
- 
-     const finalResponse = response.data;
+     let historyId = null;
+    // Save history automatically (best-effort)
+    try {
+      const historyRecord = await History.create({
+        user: req.user.id,
+        query: text,
+        prediction: response.data.prediction,
+        type: type,
+        confidence: response.data.confidence || response.data.probability,
+      });
+      historyId = historyRecord._id;
+    } catch (historyError) {
+      console.error(`[${req.requestId}] Failed to save history: ${historyError.message}`);
+    }
+
+    const finalResponse = { ...response.data, historyId };
      if (typeof finalResponse.confidence === "number") {
        finalResponse.confidence = Math.round(finalResponse.confidence * 100) / 100;
      }
@@ -361,7 +415,7 @@ router.post('/predict', protect, async (req, res) => {
 
 router.post("/feedback", protect, async (req, res) => {
  try {
-    const { text, predicted_label, correct_label } = req.body;
+    const { text, predicted_label, correct_label, historyId, note } = req.body;
 
     if (!text || !correct_label) {
       return res
@@ -370,16 +424,47 @@ router.post("/feedback", protect, async (req, res) => {
           success: false,
           message: "Validation failed",
           error: validationMessages.feedbackFieldsRequired
-});
+        });
     }
 
-    const response = await axios.post(`${ML_API_BASE}/feedback`, {
-      text,
-      predicted_label,
-      correct_label,
-    });
+    if (historyId) {
+      try {
+        const label = predicted_label.toLowerCase() === correct_label.toLowerCase() ? 'correct' : 'incorrect';
+        await History.findByIdAndUpdate(historyId, {
+          feedback: {
+            label,
+            note: note || '',
+            submittedAt: new Date()
+          }
+        });
+      } catch (err) {
+        console.error(`[${req.requestId}] Failed to update History document with feedback:`, err.message);
+        return res.status(500).json({ error: "Failed to record feedback in database" });
+      }
+    }
 
-    res.status(response.status).json(response.data);
+    let flaskFailed = false;
+    let response;
+    try {
+      response = await axios.post(`${ML_API_BASE}/feedback`, {
+        text,
+        predicted_label,
+        correct_label,
+      });
+    } catch (flaskErr) {
+      console.error(`[${req.requestId}] Flask ML API failed to record feedback:`, flaskErr.message);
+      flaskFailed = true;
+      // We still return success if MongoDB succeeded, as per fallback plan.
+      if (!historyId) {
+        throw flaskErr;
+      }
+    }
+
+    if (flaskFailed) {
+      res.status(201).json({ message: "Feedback recorded in database, but failed to sync to ML engine.", historyId });
+    } else {
+      res.status(response.status).json({ ...response.data, historyId });
+    }
   } catch (error) {
     // Capture error in Sentry with context
     Sentry.captureException(error, {
@@ -398,6 +483,25 @@ router.post("/feedback", protect, async (req, res) => {
       return res.status(error.response.status).json(error.response.data);
     }
     console.error(`[${req.requestId}] Feedback error:`, error.message);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+});
+
+router.get("/feedback/stats", protect, async (req, res) => {
+  try {
+    const response = await axios.get(`${ML_API_BASE}/feedback/stats`);
+    res.json(response.data);
+  } catch (error) {
+    if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+      console.error("Flask ML API is unavailable:", error.message);
+      return res.status(503).json({
+        error: "Flask ML API is currently unavailable. Please try again later.",
+      });
+    }
+    if (error.response) {
+      return res.status(error.response.status).json(error.response.data);
+    }
+    console.error(`[${req.requestId}] Feedback stats error:`, error.message);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
@@ -542,6 +646,37 @@ router.post("/bulk-predict", predictLimiter, protect, upload.single("file"), asy
      res.status(500).json({ error: "Something went wrong" });
    }
 });
+
+router.post('/predict', async (req, res) => {
+  try {
+    const { text, sender } = req.body;
+let domainScore = 0;
+    if (sender) {
+      const domain = sender.split('@')[1];
+      if (domain) {
+        const result = await domainReputation.checkReputation(domain);
+        domainScore = result.score;
+      }
+    }
+    
+    // Get ML prediction
+    const mlResult = await getMLPrediction(text);
+    
+    // Combine scores
+    const finalScore = (mlResult.confidence * 100 + domainScore) / 2;
+    const isSpam = finalScore > 50 || mlResult.prediction === 'spam';
+    
+    res.json({
+      prediction: isSpam ? 'spam' : 'ham',
+      confidence: finalScore,
+      domainReputation: domainScore,
+      mlConfidence: mlResult.confidence
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Prediction failed' });
+  }
+});
+
 
 router.post("/bulk-predict/export", predictLimiter, protect, upload.single("file"), async (req, res) => {
   try {
@@ -692,5 +827,44 @@ router.get("/importance", async (req, res) => {
       res.status(500).json({ error: "Something went wrong" });
     }
 });
+
+router.get('/stats', protect, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get all predictions for user
+    const predictions = await Prediction.find({ userId });
+    
+    // Calculate stats
+    const total = predictions.length;
+    const todayCount = predictions.filter(p => 
+      new Date(p.createdAt) >= today
+    ).length;
+    
+    // Spam vs Ham breakdown
+    const spamCount = predictions.filter(p => 
+      p.result === 'spam' || p.result === 'smishing'
+    ).length;
+    const hamCount = predictions.filter(p => 
+      p.result === 'ham' || p.result === 'safe'
+    ).length;
+
+    res.json({
+      today: todayCount,
+      total: total,
+      spamCount: spamCount,
+      hamCount: hamCount
+    });
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+
+router.post("/api/predict/explain", predictLimiter, protect, explainPrediction);
+
 
 module.exports = router;
