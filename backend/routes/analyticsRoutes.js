@@ -88,28 +88,23 @@ router.get('/analytics', protect, async (req, res) => {
 
 router.get('/accuracy', protect, async (req, res) => {
   try {
-    const feedbacks = await Feedback.find({ userId: req.user.id });
-    
-    if (!feedbacks.length) {
-      return res.json({ accuracy: 0, total: 0, message: 'No feedback yet' });
-    }
-    
-    const correct = feedbacks.filter(f => 
-      f.predicted_label === f.correct_label
-    ).length;
-    
-    const accuracy = Math.round((correct / feedbacks.length) * 100);
+    const key = `rate_limit:${req.user.id}`;
+    const current = await cache.get(key) || 0;
+    const limit = 100;
+    const remaining = Math.max(0, limit - current);
     
     res.json({
-      accuracy,
-      total: feedbacks.length,
-      correct,
-      incorrect: feedbacks.length - correct
+      limit,
+      used: current,
+      remaining,
+      percentage: Math.round((current / limit) * 100),
+      reset: new Date(Date.now() + 3600 * 1000).toISOString()
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch accuracy' });
+    res.status(500).json({ error: 'Failed to fetch rate limit' });
   }
 });
+
 
 module.exports = router;
       

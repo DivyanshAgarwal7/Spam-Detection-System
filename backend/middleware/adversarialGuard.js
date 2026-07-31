@@ -1,0 +1,214 @@
+/**
+ * Adversarial Guard - Runtime pattern detection & confidence monitoring
+
+ */
+
+const CONFIDENCE_THRESHOLD = parseFloat(process.env.CONFIDENCE_THRESHOLD) || 0.6;
+const FLAG_LOW_CONFIDENCE = process.env.FLAG_LOW_CONFIDENCE === 'true';
+
+// Common adversarial patterns
+const ADVERSARIAL_PATTERNS = {
+    characterSubstitution: {
+        regex: /[@4áâ][3éè][1!í][0óö][$5z]/gi,
+        weight: 0.3
+    },
+    excessiveNoise: {
+        regex: /[!?.,]{3,}/g,
+        weight: 0.2
+    },
+    unusualCapitalization: {
+        regex: /[A-Z]{3,}/g,
+        weight: 0.2
+    },
+    repeatedPunctuation: {
+        regex: /([!?.,])\1{2,}/g,
+        weight: 0.2
+    },
+    suspiciousWords: {
+        regex: /\b(free|claim|prize|winner|urgent|click|bonus|cash)\b/gi,
+        weight: 0.3
+    },
+    urlPattern: {
+        regex: /https?:\/\/[^\s]+|bit\.ly|tinyurl|shorturl/gi,
+        weight: 0.3
+    },
+    leetspeak: {
+        regex: /[4@]|[3€]|[1!]|[0]|[5$]|[7+]|\\|\\|/gi,
+        weight: 0.4
+    }
+};
+
+
+/**
+ * Detect adversarial patterns in text
+ */
+
+function detectAdversarialPatterns(text) {
+    if (!text) return { isSuspicious: false, score: 0, patterns: [] };
+
+    let score = 0;
+    const matched = [];
+    const details = {};
+
+    for (const [name, pattern] of Object.entries(ADVERSARIAL_PATTERNS)) {
+        const matches = text.match(pattern.regex);
+        if (matches) {
+            const count = matches.length;
+            const patternScore = Math.min(pattern.weight * count, 1.0);
+            score += patternScore;
+            matched.push(name);
+            details[name] = { count, score: patternScore };
+        }
+    }
+
+    const normalizedScore = Math.min(score, 1.0);
+    
+
+    // Normalize score
+    const normalizedScore = Math.min(score, 1.0);
+    
+    // Check for extremely long text (potential DoS)
+
+    if (text.length > 10000) {
+        return {
+            isSuspicious: true,
+            score: Math.max(normalizedScore, 0.8),
+            patterns: [...matched, 'excessive_length'],
+            details: { ...details, excessive_length: text.length }
+        };
+    }
+
+    return {
+        isSuspicious: normalizedScore > 0.5,
+        score: normalizedScore,
+        patterns: matched,
+        details
+    };
+}
+
+function adversarialGuard(req, res, next) {
+    const text = req.body?.text || req.query?.text || '';
+    
+/**
+ * Middleware to check for adversarial patterns
+ */
+function adversarialGuard(req, res, next) {
+    const text = req.body?.text || req.query?.text || '';
+    
+    // Skip if no text
+
+    if (!text) {
+        req.adversarialAnalysis = { isSuspicious: false, score: 0, patterns: [] };
+        return next();
+    }
+
+    const analysis = detectAdversarialPatterns(text);
+    req.adversarialAnalysis = analysis;
+
+
+    // Check for adversarial patterns
+    const analysis = detectAdversarialPatterns(text);
+    req.adversarialAnalysis = analysis;
+
+    // Log suspicious activity
+
+    if (analysis.isSuspicious) {
+        console.log(`⚠️ [ADVERSARIAL GUARD] Suspicious pattern detected:`, {
+            score: analysis.score,
+            patterns: analysis.patterns,
+            textPreview: text.substring(0, 100),
+            ip: req.ip,
+            user: req.user?.id || 'anonymous'
+        });
+    }
+
+    next();
+}
+
+
+/**
+ * Middleware to monitor prediction confidence
+ */
+
+function monitorConfidence(req, res, next) {
+    const originalSend = res.send;
+    
+    res.send = function(data) {
+        try {
+
+            // Parse the response
+
+            let responseData;
+            if (typeof data === 'string') {
+                responseData = JSON.parse(data);
+            } else {
+                responseData = data;
+            }
+
+            if (responseData && typeof responseData === 'object') {
+                const confidence = responseData.confidence_score || responseData.confidence || 0;
+                
+
+            // Check if it's a prediction response
+            if (responseData && typeof responseData === 'object') {
+                const confidence = responseData.confidence_score || responseData.confidence || 0;
+                
+                // Add adversarial analysis
+
+                if (req.adversarialAnalysis) {
+                    responseData.adversarial_analysis = {
+                        is_suspicious: req.adversarialAnalysis.isSuspicious,
+                        score: req.adversarialAnalysis.score,
+                        patterns: req.adversarialAnalysis.patterns
+                    };
+                }
+
+
+                // Flag low confidence
+
+                if (FLAG_LOW_CONFIDENCE && confidence < CONFIDENCE_THRESHOLD) {
+                    responseData.low_confidence = true;
+                    responseData.needs_review = true;
+                    
+                    console.log(`⚠️ [CONFIDENCE MONITOR] Low confidence prediction:`, {
+                        confidence,
+                        threshold: CONFIDENCE_THRESHOLD,
+                        prediction: responseData.result || responseData.prediction
+                    });
+                }
+
+
+                        prediction: responseData.result || responseData.prediction,
+                        textPreview: req.body?.text?.substring(0, 100)
+                    });
+                }
+
+                // If suspicious AND low confidence, flag for immediate review
+                if (req.adversarialAnalysis?.isSuspicious && confidence < CONFIDENCE_THRESHOLD) {
+                    responseData.requires_immediate_review = true;
+                    responseData.review_reason = 'Adversarial pattern detected with low confidence';
+                }
+
+                // Return modified response
+
+                const jsonData = JSON.stringify(responseData);
+                originalSend.call(this, jsonData);
+                return;
+            }
+        } catch (e) {}
+        } catch (e) {
+            // If parsing fails, just pass through
+        }
+        
+        originalSend.call(this, data);
+    };
+    
+    next();
+}
+
+module.exports = {
+    adversarialGuard,
+    monitorConfidence,
+    detectAdversarialPatterns,
+    CONFIDENCE_THRESHOLD
+};

@@ -1,7 +1,7 @@
 // backend/controllers/activityController.js
 const mongoose = require('mongoose');
 const History = require('../models/History');
-
+const { replacements, tonePrefixes } = require('../utils/despamificationRules');
 // ==================== DE-SPAMIFICATION LOGIC ====================
 exports.despamify = async (req, res) => {
   try {
@@ -14,32 +14,6 @@ exports.despamify = async (req, res) => {
     // Simple de-spamification logic
     let deSpammed = text;
 
-    const replacements = {
-      'URGENT': 'Someone wants to contact you',
-      'FREE': 'There is an offer',
-      'WIN': 'There is a notification',
-      'PRIZE': 'There is a message about rewards',
-      'CLAIM': 'There is a message for you',
-      'CLICK': 'There is a link to visit',
-      'NOW': 'soon',
-      '!!!': '.',
-      '$$$': '',
-      '100%': '',
-      'GUARANTEED': '',
-      'LIMITED TIME': '',
-      'ACT NOW': '',
-      "DON'T MISS": '',
-      'EXCLUSIVE': '',
-      'YOU WON': 'There is a notification'
-    };
-
-    // Apply tone adjustments
-    const tonePrefixes = {
-      neutral: '',
-      friendly: 'Hi there! ',
-      formal: 'We would like to inform you that ',
-      casual: 'Hey! '
-    };
 
     const prefix = tonePrefixes[tone] || '';
 
@@ -114,11 +88,23 @@ exports.getStats = async (req, res) => {
 };
 
 // ==================== USER ACTIVITY HEATMAP LOGIC ====================
-// ==================== USER ACTIVITY HEATMAP LOGIC ====================
 exports.getActivity = async (req, res) => {
   try {
     const { userId } = req.params;
     const { year, month } = req.query;
+
+    const yearNum = parseInt(year, 10);
+    const monthNum = parseInt(month, 10);
+
+    if (!year || isNaN(yearNum)) {
+      return res.status(400).json({ error: "Valid year query parameter (number) is required." });
+    }
+    if (!month || isNaN(monthNum)) {
+      return res.status(400).json({ error: "Valid month query parameter (number) is required." });
+    }
+    if (monthNum < 1 || monthNum > 12) {
+      return res.status(400).json({ error: "Month must be between 1 and 12." });
+    }
 
     // Validate user id format before using it in aggregation
     if (!mongoose.Types.ObjectId.isValid(userId)) {
@@ -132,8 +118,8 @@ exports.getActivity = async (req, res) => {
       });
     }
 
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+    const startDate = new Date(yearNum, monthNum - 1, 1);
+    const endDate = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
 
     const activities = await History.aggregate([
       {
