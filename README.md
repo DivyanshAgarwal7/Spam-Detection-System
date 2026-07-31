@@ -530,6 +530,25 @@ call site:
   configured root. `configure_logging()` is idempotent, so a reimport or a test
   that loads the app twice never double-emits.
 
+### Redaction
+
+Before a record is formatted it passes through a `RedactionFilter` that scrubs
+sensitive material to `***`, so a token or address accidentally handed to a log
+call never reaches the sink in the clear. It covers:
+
+* the `X-Internal-Secret` value,
+* OAuth **access / refresh tokens** and HTTP `Bearer` tokens,
+* threat-intel **API keys** (`SAFE_BROWSING_API_KEY`, `VIRUSTOTAL_API_KEY`),
+* **email addresses** and message bodies.
+
+Both the rendered message and string-valued structured fields are cleaned.
+Exact secret values present in the environment at startup are additionally
+scrubbed literally, catching a bare value logged without a recognisable key.
+
+Contract coverage lives in `backend/tests/test_logging.py`: every emitted record
+is valid JSON with a `request_id`, the id propagates from the header, and a
+known secret / token / email never survives to the output.
+
 ---
 
 ## 📊 Metrics & Monitoring

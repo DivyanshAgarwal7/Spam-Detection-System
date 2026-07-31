@@ -74,9 +74,9 @@ settings = load_settings()
 
 app = Flask(__name__)
 
-# Install the JSON log formatter + request-id filter on the root logger before
-# anything logs, so every line (including app.logger records that propagate
-# here) is structured from the first request (#1006).
+# Install the JSON log formatter + request-id/redaction filters on the root
+# logger before anything logs, so every line (including app.logger records that
+# propagate here) is structured and scrubbed from the first request (#1006).
 configure_logging()
 logger = get_logger("ml_api")
 access_logger = get_logger("ml_api.access")
@@ -275,8 +275,9 @@ def validate_internal_request(f):
         # Check internal secret
         provided = request.headers.get("X-Internal-Secret", "")
         if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
-            app.logger.warning(
-                f"⚠️  Unauthorized internal request from {request.remote_addr}"
+            logger.warning(
+                "unauthorized_internal_request",
+                extra={"remote_addr": request.remote_addr, "path": request.path},
             )
             return error_response(
                 ErrorCode.FORBIDDEN,
@@ -286,9 +287,9 @@ def validate_internal_request(f):
                 extra={"success": False},
             )
 
-        # Log internal request
-        app.logger.info(
-            f"🔐 [ZERO-TRUST] Internal request to {request.path} from {request.remote_addr}"
+        logger.info(
+            "internal_request",
+            extra={"remote_addr": request.remote_addr, "path": request.path},
         )
         return f(*args, **kwargs)
 
@@ -348,7 +349,7 @@ def ip_allowlist(f):
             client_ip = client_ip.split(",")[0].strip()
 
         if client_ip not in allowed_list:
-            app.logger.warning(f"⚠️  Blocked request from unauthorized IP: {client_ip}")
+            logger.warning("blocked_unauthorized_ip", extra={"client_ip": client_ip})
             return (
                 jsonify(
                     {"success": False, "error": "Access denied from this IP address"}
@@ -380,8 +381,9 @@ def validate_request(f):
                     p in value.lower()
                     for p in ["<script", "javascript:", "onerror", "onload"]
                 ):
-                    app.logger.warning(
-                        f"⚠️  Suspicious query param: {key}={value[:50]}"
+                    logger.warning(
+                        "suspicious_query_param",
+                        extra={"param": key, "value_preview": value[:50]},
                     )
                     return (
                         jsonify(
@@ -398,8 +400,9 @@ def validate_request(f):
 
             data_str = json.dumps(data).lower()
             if any(p in data_str for p in ["<script", "javascript:", "onerror"]):
-                app.logger.warning(
-                    f"⚠️  Suspicious request body from {request.remote_addr}"
+                logger.warning(
+                    "suspicious_request_body",
+                    extra={"remote_addr": request.remote_addr},
                 )
                 return jsonify({"success": False, "error": "Invalid request body"}), 400
 
@@ -451,15 +454,31 @@ def _current_request_id():
     return getattr(g, "request_id", "unknown")
 
 
+def _log_error(code, status, message, *, exc_info=False):
+    """Emit one structured error line carrying the stable code + request id."""
+    logger.error(
+        "request_error",
+        exc_info=exc_info,
+        extra={
+            "error_code": ErrorCode(code).value,
+            "status": status,
+            "detail": message,
+            "request_id": _current_request_id(),
+        },
+    )
+
+
 @app.errorhandler(ApiError)
 def handle_api_error(e):
     """Render a raised ApiError through the shared error envelope (#986)."""
+    _log_error(e.code, e.status, e.message)
     return error_response(e.code, e.message, e.status, request_id=_current_request_id())
 
 
 @app.errorhandler(400)
 def handle_bad_request(e):
     message = getattr(e, "description", None) or "Bad request"
+    _log_error(ErrorCode.BAD_REQUEST, 400, message)
     return error_response(
         ErrorCode.BAD_REQUEST, message, 400, request_id=_current_request_id()
     )
@@ -468,6 +487,7 @@ def handle_bad_request(e):
 @app.errorhandler(403)
 def handle_forbidden(e):
     message = getattr(e, "description", None) or "Forbidden"
+    _log_error(ErrorCode.FORBIDDEN, 403, message)
     # success:false is part of the zero-trust JSON shape existing callers read.
     return error_response(
         ErrorCode.FORBIDDEN,
@@ -481,6 +501,7 @@ def handle_forbidden(e):
 @app.errorhandler(404)
 def handle_not_found(e):
     message = getattr(e, "description", None) or "Not found"
+    _log_error(ErrorCode.NOT_FOUND, 404, message)
     return error_response(
         ErrorCode.NOT_FOUND, message, 404, request_id=_current_request_id()
     )
@@ -494,7 +515,7 @@ def handle_internal_error(e):
     if isinstance(e, HTTPException):
         return e
     request_id = _current_request_id()
-    app.logger.exception(f"❌ [Request-ID: {request_id}] Unhandled exception")
+    _log_error(ErrorCode.INTERNAL_ERROR, 500, "Unhandled exception", exc_info=True)
     # Keep the legacy top-level request_id alongside the new envelope so clients
     # that already read it keep working.
     return error_response(
