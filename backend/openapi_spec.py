@@ -5,21 +5,28 @@ contract: ``info``, ``servers``, the ``X-Internal-Secret`` security scheme,
 and ``paths``/``components`` for the API's routes. It is served verbatim at
 ``GET /openapi.json`` and rendered by the Swagger UI at ``GET /docs``.
 
-The document is deliberately hand-written rather than generated from the
-route table: the ``/predict`` response has a rich, evolving shape
-(``confidence``, ``domain_analysis``, ``url_risk``, ``explanation``,
-``severity``, ...) that a decorator-based generator would not capture
-faithfully. To keep the hand-authored spec honest, ``test_openapi_coverage``
-asserts every non-static registered rule is documented here.
+Response shapes stay hand-written: the ``/predict`` response has a rich,
+evolving shape (``confidence``, ``domain_analysis``, ``url_risk``,
+``explanation``, ``severity``, ...) that a generator would not capture
+faithfully. Request bodies and query parameters, however, are generated from
+the same :mod:`validation` schema registry that enforces them at runtime
+(issue #1024), so the documented request contract cannot drift from what the
+service actually accepts. To keep the hand-authored parts honest,
+``test_openapi_coverage`` asserts every non-static registered rule is
+documented here.
 
 >>> spec = build_spec()
 >>> spec["openapi"]
 '3.0.3'
 >>> "/predict" in spec["paths"]
 True
+>>> body = spec["paths"]["/predict"]["post"]["requestBody"]
+>>> body["content"]["application/json"]["schema"]["required"]
+['text']
 """
 
 from __future__ import annotations
+
 
 __all__ = ["build_spec"]
 
@@ -55,6 +62,11 @@ def build_spec():
     paths = {}
     paths.update(_core_paths())
     paths.update(_extended_paths())
+
+    # Overwrite the request bodies/parameters of any documented path that has a
+    # registered validation schema, so the served contract is generated from
+    # the exact definitions used to enforce requests (single source of truth).
+    _apply_registered_schemas(paths)
 
     schemas = {}
     schemas.update(_core_schemas())
@@ -1213,3 +1225,103 @@ def _file_upload_body():
             }
         },
     }
+
+
+# ============================================================================
+# Generation from the validation schema registry (issue #1024, PR 2/2).
+# ============================================================================
+
+
+def _apply_registered_schemas(paths):
+    """Replace request bodies/params on documented paths from the registry.
+
+    Only the ``application/json`` request-body schema is overwritten, so a path
+    that also accepts another media type (e.g. a multipart .eml upload) keeps
+    it. Response definitions are left untouched.
+    """
+    for endpoint, schema in registered_schemas().items():
+        operations = paths.get(endpoint)
+        if not operations:
+            continue
+        for method, operation in operations.items():
+            if not isinstance(operation, dict):
+                continue
+            if schema.body is not None and schema.body.fields:
+                _set_json_request_body(operation, schema.body)
+            if schema.query is not None and schema.query.fields:
+                operation["parameters"] = _query_parameters(schema.query)
+
+
+def _set_json_request_body(operation, body):
+    request_body = operation.setdefault("requestBody", {"required": True})
+    content = request_body.setdefault("content", {})
+    json_entry = content.setdefault("application/json", {})
+    json_entry["schema"] = _object_schema(body.fields)
+
+
+def _object_schema(fields):
+    properties = {}
+    required = []
+    for rule in fields:
+        properties[rule.name] = _field_property(rule)
+        if _is_required(rule):
+            required.append(rule.name)
+    schema = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _query_parameters(query):
+    parameters = []
+    for rule in query.fields:
+        schema = {}
+        if rule.type is not None:
+            schema["type"] = rule.type
+        if rule.enum is not None:
+            schema["enum"] = list(rule.enum)
+        if rule.default is not None:
+            schema["default"] = rule.default
+        parameters.append(
+            {
+                "name": rule.name,
+                "in": "query",
+                "required": bool(rule.enforced and rule.required),
+                "schema": schema or {"type": "string"},
+                "description": rule.description,
+            }
+        )
+    return parameters
+
+
+def _field_property(rule):
+    prop = {}
+    if rule.type is not None:
+        prop["type"] = rule.type
+    if rule.enum is not None:
+        prop["enum"] = list(rule.enum)
+    if rule.default is not None:
+        prop["default"] = rule.default
+    if rule.min_length is not None:
+        prop["minLength"] = rule.min_length
+    if rule.max_length is not None:
+        prop["maxLength"] = rule.max_length
+    if rule.description:
+        prop["description"] = rule.description
+    return prop
+
+
+def _is_required(rule):
+    """Whether a body field must be supplied for the request to be valid.
+
+    A field is required when it is enforced and either declared required /
+    non-empty, or constrained to an enum with no default (so a valid value must
+    be sent explicitly).
+    """
+    if not rule.enforced:
+        return False
+    return bool(
+        rule.required
+        or rule.non_empty
+        or (rule.enum is not None and rule.default is None)
+    )
