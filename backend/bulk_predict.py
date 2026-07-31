@@ -253,6 +253,22 @@ def _score_rows(valid_rows, snapshot, batch_size):
         chunk_results, chunk_skipped = _score_batch_isolated(chunk, snapshot)
         results.extend(chunk_results)
         skipped.extend(chunk_skipped)
+        messages = [msg for _, msg in chunk]
+        try:
+            results.extend(_predict_batch(messages, snapshot))
+        except Exception:
+            for index, msg in chunk:
+                try:
+                    results.extend(_predict_batch([msg], snapshot))
+                except Exception:
+                    skipped.append(
+                        _skip_record(
+                            index,
+                            msg,
+                            ErrorCode.BULK_ROW_UNPROCESSABLE,
+                            "Row could not be transformed or scored.",
+                        )
+                    )
     return results, skipped
 
 
@@ -288,6 +304,35 @@ def _enforce_row_cap(rows):
             f"File contains {len(rows)} rows, exceeding the limit of {max_rows}.",
             413,
         )
+
+    max_row_len = _int_env("BULK_PREDICT_MAX_ROW_LEN", 10000)
+    valid_rows = []
+    skipped = []
+    for index, value in rows:
+        if value is None or not value.strip():
+            skipped.append(
+                _skip_record(
+                    index, value, ErrorCode.BULK_ROW_EMPTY, "Empty row skipped."
+                )
+            )
+            continue
+        msg = value.strip()
+        if len(msg) > max_row_len:
+            skipped.append(
+                _skip_record(
+                    index,
+                    msg,
+                    ErrorCode.BULK_ROW_TOO_LONG,
+                    f"Row exceeds maximum length of {max_row_len} characters.",
+                )
+            )
+            continue
+        valid_rows.append((index, msg))
+
+    batch_size = _int_env("BULK_PREDICT_BATCH_SIZE", 256)
+    results, score_skipped = _score_rows(valid_rows, snapshot, batch_size)
+    skipped.extend(score_skipped)
+    return results, skipped, None
 
 
 def _summarize(results):
