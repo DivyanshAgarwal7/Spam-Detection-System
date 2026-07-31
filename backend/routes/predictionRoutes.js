@@ -13,6 +13,7 @@ const validationMessages = require('../utils/validationMessages');
 const History = require('../models/History');
 const Rule = require('../models/Rule');
 const User = require('../models/User');
+const SenderReputation = require('../models/SenderReputation');
 const { matchKeywordRule } = require('../utils/keywordRules');
 const upload = multer();
 
@@ -287,6 +288,75 @@ router.post("/predict", predictLimiter, preventCacheStampede, protect, checkCach
      const { status, body } = classifyMlApiError(error);
      return res.status(status).json(body);
    }
+});
+
+router.post('/predict', protect, async (req, res) => {
+  try {
+    const { text, sender } = req.body;
+   
+    //  Get ML prediction
+    const mlResult = await getMLPrediction(text);
+    
+    //  Check sender reputation
+    let reputationScore = 50;
+    let reputationLevel = 'neutral';
+    
+    if (sender) {
+      const domain = sender.split('@')[1];
+      let rep = await SenderReputation.findOne({ domain });
+      
+      if (rep) {
+        reputationScore = rep.score;
+        reputationLevel = rep.getLevel();
+        
+        //  If sender is malicious, return spam immediately
+        if (reputationLevel === 'suspicious' && reputationScore < 30) {
+          return res.json({
+            prediction: 'spam',
+            confidence: 0.95,
+            reason: 'Sender has low reputation score',
+            senderReputation: {
+              score: reputationScore,
+              level: reputationLevel
+            }
+          });
+        }
+        
+        //  If sender is trusted, reduce spam confidence
+        if (reputationLevel === 'trusted' && mlResult.prediction === 'spam') {
+          return res.json({
+            prediction: 'ham',
+            confidence: 0.70,
+            reason: 'Trusted sender',
+            senderReputation: {
+              score: reputationScore,
+              level: reputationLevel
+            }
+          });
+        }
+      }
+    }
+    
+    //  Adjust confidence based on reputation
+    let adjustment = 0;
+    if (reputationLevel === 'trusted') adjustment = -0.15;
+    if (reputationLevel === 'suspicious') adjustment = 0.20;
+    
+    let finalConfidence = mlResult.confidence + adjustment;
+    finalConfidence = Math.max(0, Math.min(1, finalConfidence));
+    
+    res.json({
+      prediction: finalConfidence > 0.5 ? 'spam' : 'ham',
+      confidence: finalConfidence,
+      mlConfidence: mlResult.confidence,
+      senderReputation: {
+        score: reputationScore,
+        level: reputationLevel
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Prediction failed' });
+  }
 });
 
 router.post("/feedback", protect, async (req, res) => {

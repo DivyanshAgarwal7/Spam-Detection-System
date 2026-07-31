@@ -30,6 +30,7 @@ const predictionRoutes = require("./routes/predictionRoutes");
 const feedbackRoutes = require('./routes/feedbackRoutes');
 const emailIntegrationRoutes = require("./routes/emailIntegrationRoutes");
 const imapRoutes = require("./routes/imapRoutes");
+const federationRoutes = require('./routes/federationRoutes');
 const utilityRoutes = require("./routes/utilityRoutes");
 // ===== STARTUP TIMER =====
 const SERVER_START_TIME = Date.now();
@@ -62,6 +63,7 @@ const app = express();
 const { apiLimiter } = require('./middleware/rateLimiter');
 app.use('/predict', apiLimiter);
 app.use('/api', feedbackRoutes);
+app.use('/api/federation', federationRoutes);
 
 // Trust the first proxy so express-rate-limit correctly identifies user IPs
 
