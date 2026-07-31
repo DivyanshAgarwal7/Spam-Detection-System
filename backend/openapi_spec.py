@@ -395,6 +395,17 @@ def _core_schemas():
                     "description": "Computed spam severity summary.",
                     "additionalProperties": True,
                 },
+                "model_version": {
+                    "type": "integer",
+                    "description": (
+                        "Version of the model set that produced this prediction "
+                        "(issue #1007); increments on each /reload-model."
+                    ),
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of the model that produced this prediction.",
+                },
             },
             "required": [
                 "input",
@@ -497,7 +508,15 @@ def _core_schemas():
                             "importance": {"type": "number"},
                         },
                     },
-                }
+                },
+                "model_version": {
+                    "type": "integer",
+                    "description": "Version of the model these importances belong to (issue #1007).",
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of that model.",
+                },
             },
         },
         "EmailHeaderRequest": {

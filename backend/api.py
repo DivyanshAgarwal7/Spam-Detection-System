@@ -1347,6 +1347,13 @@ def predict():
             severity=severity,
         )
 
+        # Provenance (issue #1007 part 2): tag every prediction with the version
+        # and short checksum of the exact model set that produced it, so a result
+        # can be traced back to a specific deployed/reloaded model.
+        response_data["model_version"] = serving.version
+        if serving.metadata is not None:
+            response_data["model_checksum"] = serving.metadata.short_checksum
+
         metrics.record_prediction(result=final_output, input_type=input_type)
 
         return jsonify(response_data)
@@ -1496,11 +1503,17 @@ def get_word_of_the_day():
 @validate_internal_request
 def get_feature_importance():
     try:
+        snapshot = serving_state.STATE.snapshot()
         top_features = [
             {"feature": word, "importance": score}
-            for word, score in serving_state.STATE.snapshot().xai_service.get_global_importance()
+            for word, score in snapshot.xai_service.get_global_importance()
         ]
-        return jsonify({"top_features": top_features})
+        # Same provenance tag as /predict (issue #1007 part 2): the importances
+        # belong to a specific model version, not the endpoint in the abstract.
+        response = {"top_features": top_features, "model_version": snapshot.version}
+        if snapshot.metadata is not None:
+            response["model_checksum"] = snapshot.metadata.short_checksum
+        return jsonify(response)
     except Exception as e:
         app.logger.error(f"Failed to compute feature importance: {e}")
         return error_response(

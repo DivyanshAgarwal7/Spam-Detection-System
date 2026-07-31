@@ -96,6 +96,19 @@ per-artifact `checksums`, and the full `metadata`:
 installs bare fakes). Dropping a `model_card.json` next to the model artifact is
 the only step needed to populate `trained_at` / `metrics` / `labels`.
 
+### Prediction & reload provenance
+
+`/predict` and `/importance` responses carry an additive `model_version` (and a
+short `model_checksum` when provenance is available) identifying the model set
+that served the request — existing fields are unchanged, so this is backward
+compatible. On every `/reload-model`, a structured audit line is logged:
+
+```
+model reloaded v2 -> v3 (checksum 1c7a… -> 9f2b…)
+```
+
+so a version bump and the model bytes going in and out are visible in the logs.
+
 ---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
