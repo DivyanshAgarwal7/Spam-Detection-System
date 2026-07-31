@@ -3,7 +3,7 @@ import { useTheme } from "../context/ThemeContext";
 import api from "../utils/axiosInstance";
 import { SpamTrends } from './SpamTrends';
 import { RecentActivity } from './RecentActivity';
-import { AccuracyMeter } from './AccuracyMeter';
+import { RateLimitDashboard } from './RateLimitDashboard';
 
 
 export default function SpamInsightsDashboard() {
@@ -18,8 +18,8 @@ export default function SpamInsightsDashboard() {
     setError("");
     try {
       const url = cat
-        ? `${import.meta.env.VITE_API_URI || ""}/spam-insights?category=${cat}`
-        : `${import.meta.env.VITE_API_URI || ""}/spam-insights`;
+        ? `/spam-insights?category=${cat}`
+        : "/spam-insights";
       const res = await api.get(url);
       setInsights(res.data);
     } catch (err) {
@@ -196,8 +196,9 @@ export default function SpamInsightsDashboard() {
           </div>
 
           <div className="dashboard-section">
-             <AccuracyMeter />
+             <RateLimitDashboard />
           </div>
+
 
 
           {/* Recent Suspicious Terms */}
@@ -222,6 +223,8 @@ export default function SpamInsightsDashboard() {
           </div>
         </div>
       )}
+
+      <FeedbackInsights />
     </div>
   );
 }
