@@ -80,6 +80,8 @@ class ErrorCode(StrEnum):
     # ── Readiness / graceful shutdown (issue #1009) ──────────────────────
     NOT_READY = "NOT_READY"
 
+    # ── Idempotency for mutating endpoints (issue #1022) ─────────────────
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     # ── Bulk prediction (issue #1021) ────────────────────────────────────
     # BULK_MODEL_UNAVAILABLE / BULK_TOO_MANY_ROWS are fatal (whole request);
     # the BULK_ROW_* codes are per-row skip reasons returned in the "skipped"

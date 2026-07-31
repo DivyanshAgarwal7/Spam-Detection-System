@@ -27,6 +27,7 @@ def register_reload_endpoint(app):
     """Attach ``/reload-model`` and ``/model-status`` to ``app``."""
 
     @app.route("/reload-model", methods=["POST"])
+    @idempotent
     def reload_model():
         provided = request.headers.get("X-Internal-Secret", "")
         internal_secret = os.getenv("INTERNAL_SECRET", "")
