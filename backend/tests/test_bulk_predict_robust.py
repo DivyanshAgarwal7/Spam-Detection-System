@@ -1,13 +1,14 @@
-"""Robustness coverage for the bulk-prediction endpoints (issue #1021).
+"""Robustness + streaming coverage for the bulk-prediction endpoints (#1021).
 
-Exercises the three behaviours the resilient path guarantees: valid rows are
-still returned when mixed with bad ones (which land in ``skipped``), the total
-row cap is enforced as a typed fatal error, and every response is stamped with
-the serving model version. A fake serving snapshot is installed so the tests
-depend only on the endpoint logic, not on the real ``.pkl`` artifacts.
+Covers the resilient buffered path (valid rows returned alongside a typed
+``skipped`` list, row-cap enforcement, version stamping) and the opt-in NDJSON
+streaming path (per-row lines plus meta/summary framing). A fake serving
+snapshot is installed so the tests depend only on the endpoint logic, not on
+the real ``.pkl`` artifacts.
 """
 
 import io
+import json
 from   pathlib                  import Path
 import sys
 
@@ -65,9 +66,9 @@ def fake_state():
     )
 
 
-def _upload(client, csv_text, path="/bulk-predict"):
+def _upload(client, csv_text, path="/bulk-predict", **kwargs):
     data = {"file": (io.BytesIO(csv_text.encode("utf-8")), "test.csv")}
-    return client.post(path, data=data, content_type="multipart/form-data")
+    return client.post(path, data=data, content_type="multipart/form-data", **kwargs)
 
 
 class TestRowIsolation:
@@ -134,3 +135,58 @@ class TestVersionStamping:
         assert res.headers["X-Model-Version"] == str(fake_state.version)
         body = res.data.decode("utf-8")
         assert "model_version" in body.splitlines()[0]
+
+
+def _parse_ndjson(raw):
+    return [
+        json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()
+    ]
+
+
+class TestNdjsonStreaming:
+    def test_stream_query_param_shape(self, client, fake_state, monkeypatch):
+        monkeypatch.setenv("BULK_PREDICT_MAX_ROW_LEN", "50")
+        csv_text = "text\n" "this is a long spam message\n" "hi\n" + f"{_POISON} row\n"
+        res = _upload(client, csv_text, path="/bulk-predict?stream=ndjson")
+        assert res.status_code == 200
+        assert res.headers["Content-Type"].startswith("application/x-ndjson")
+        assert res.headers["X-Model-Version"] == str(fake_state.version)
+
+        records = _parse_ndjson(res.data)
+        assert records[0]["type"] == "meta"
+        assert records[0]["model_version"] == fake_state.version
+
+        results = [r for r in records if r["type"] == "result"]
+        skipped = [r for r in records if r["type"] == "skipped"]
+        summary = records[-1]
+        assert {r["message"] for r in results} == {
+            "this is a long spam message",
+            "hi",
+        }
+        assert any(s["reason"] == "BULK_ROW_UNPROCESSABLE" for s in skipped)
+        assert summary["type"] == "summary"
+        assert summary["total_messages"] == len(results)
+        assert summary["skipped_count"] == len(skipped)
+
+    def test_stream_via_accept_header(self, client, fake_state):
+        res = _upload(
+            client,
+            "text\nsome message content\n",
+            headers={"Accept": "application/x-ndjson"},
+        )
+        assert res.status_code == 200
+        assert res.headers["Content-Type"].startswith("application/x-ndjson")
+        records = _parse_ndjson(res.data)
+        assert records[0]["type"] == "meta"
+
+    def test_row_cap_enforced_before_stream(self, client, fake_state, monkeypatch):
+        monkeypatch.setenv("BULK_PREDICT_MAX_ROWS", "1")
+        csv_text = "text\na message\nb message\n"
+        res = _upload(client, csv_text, path="/bulk-predict?stream=ndjson")
+        assert res.status_code == 413
+        assert res.get_json()["error_detail"]["code"] == "BULK_TOO_MANY_ROWS"
+
+    def test_non_streaming_is_default(self, client, fake_state):
+        res = _upload(client, "text\nsome message content\n")
+        assert res.headers["Content-Type"].startswith("application/json")
+        assert "results" in res.get_json()

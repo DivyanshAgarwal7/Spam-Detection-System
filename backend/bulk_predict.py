@@ -12,15 +12,22 @@ Caps are configurable via the environment, mirroring ``BULK_PREDICT_BATCH_SIZE``
 ``BULK_PREDICT_MAX_ROWS`` bounds the total data rows accepted (exceeding it is a
 fatal, typed error) and ``BULK_PREDICT_MAX_ROW_LEN`` bounds a single row's length
 (over-length rows are skipped, not fatal).
+
+Clients that prefer not to buffer a large result set can opt into an NDJSON
+stream (``?stream=ndjson`` or ``Accept: application/x-ndjson``): the same rows
+are scored and emitted one newline-delimited JSON object at a time. The default
+(buffered JSON) response is unchanged.
 """
 
 import csv
 import io
+import json
 import os
 
 import numpy as np
 
-from   flask                    import Blueprint, jsonify, request, send_file
+from   flask                    import (Blueprint, Response, jsonify, request,
+                                        send_file, stream_with_context)
 
 from   errors                   import ApiError, ErrorCode
 from   rate_limiting            import RateLimitPolicy, rate_limit
@@ -29,6 +36,8 @@ import serving_state
 __all__ = ["bulk_predict_bp"]
 
 bulk_predict_bp = Blueprint("bulk_predict", __name__)
+
+NDJSON_MIMETYPE = "application/x-ndjson"
 
 # Longest row message echoed back in a skip record; full over-length payloads
 # would bloat the response, so only a preview is returned for context.
@@ -65,6 +74,14 @@ def _resolve_snapshot():
             503,
         )
     return snapshot
+
+
+def _wants_ndjson():
+    """True when the caller opted into the NDJSON streaming response."""
+    if request.args.get("stream", "").lower() == "ndjson":
+        return True
+    accept = request.headers.get("Accept", "")
+    return NDJSON_MIMETYPE in accept.lower()
 
 
 def _skip_record(index, message, code, detail):
@@ -134,6 +151,33 @@ def _extract_rows(file):
     return rows, None
 
 
+def _partition_rows(rows, max_row_len):
+    """Split extracted rows into scorable rows and typed per-row skips."""
+    valid_rows = []
+    skipped = []
+    for index, value in rows:
+        if value is None or not value.strip():
+            skipped.append(
+                _skip_record(
+                    index, value, ErrorCode.BULK_ROW_EMPTY, "Empty row skipped."
+                )
+            )
+            continue
+        msg = value.strip()
+        if len(msg) > max_row_len:
+            skipped.append(
+                _skip_record(
+                    index,
+                    msg,
+                    ErrorCode.BULK_ROW_TOO_LONG,
+                    f"Row exceeds maximum length of {max_row_len} characters.",
+                )
+            )
+            continue
+        valid_rows.append((index, msg))
+    return valid_rows, skipped
+
+
 def _predict_batch(messages, snapshot):
     """Score a batch of messages against ``snapshot`` and shape the results.
 
@@ -173,18 +217,42 @@ def _predict_batch(messages, snapshot):
     return batch_results
 
 
-def _score_rows(valid_rows, snapshot, batch_size):
-    """Score pre-validated rows, isolating per-row failures.
+def _score_batch_isolated(chunk, snapshot):
+    """Score one chunk, degrading to per-row scoring if the batch call fails.
 
-    A batch is scored in one vectorized call for speed; if that call raises
-    (e.g. one un-transformable row poisons the batch), the batch is retried a
-    row at a time so the healthy rows still return and only the genuinely bad
-    ones land in ``skipped``.
+    Returns ``(results, skipped)`` for the chunk so healthy rows survive a
+    single poison row that would otherwise raise for the whole batch.
     """
+    messages = [msg for _, msg in chunk]
+    try:
+        return _predict_batch(messages, snapshot), []
+    except Exception:
+        results = []
+        skipped = []
+        for index, msg in chunk:
+            try:
+                results.extend(_predict_batch([msg], snapshot))
+            except Exception:
+                skipped.append(
+                    _skip_record(
+                        index,
+                        msg,
+                        ErrorCode.BULK_ROW_UNPROCESSABLE,
+                        "Row could not be transformed or scored.",
+                    )
+                )
+        return results, skipped
+
+
+def _score_rows(valid_rows, snapshot, batch_size):
+    """Score pre-validated rows in batches, isolating per-row failures."""
     results = []
     skipped = []
     for start in range(0, len(valid_rows), batch_size):
         chunk = valid_rows[start : start + batch_size]
+        chunk_results, chunk_skipped = _score_batch_isolated(chunk, snapshot)
+        results.extend(chunk_results)
+        skipped.extend(chunk_skipped)
         messages = [msg for _, msg in chunk]
         try:
             results.extend(_predict_batch(messages, snapshot))
@@ -217,6 +285,18 @@ def parse_and_predict_file(file, snapshot):
     if not rows:
         return None, None, "No valid messages found in the file."
 
+    _enforce_row_cap(rows)
+
+    max_row_len = _int_env("BULK_PREDICT_MAX_ROW_LEN", 10000)
+    valid_rows, skipped = _partition_rows(rows, max_row_len)
+
+    batch_size = _int_env("BULK_PREDICT_BATCH_SIZE", 256)
+    results, score_skipped = _score_rows(valid_rows, snapshot, batch_size)
+    skipped.extend(score_skipped)
+    return results, skipped, None
+
+
+def _enforce_row_cap(rows):
     max_rows = _int_env("BULK_PREDICT_MAX_ROWS", 10000)
     if len(rows) > max_rows:
         raise ApiError(
@@ -265,6 +345,51 @@ def _summarize(results):
     return total, spam_count, non_spam_count, spam_pct
 
 
+def _iter_ndjson(rows, snapshot):
+    """Yield the bulk result set as newline-delimited JSON, row by row.
+
+    The stream opens with a ``meta`` line (model version + row count), then one
+    ``result`` line per scored row, then any ``skipped`` lines, and closes with
+    a ``summary`` line. Scoring is done in batches for speed but flushed a row
+    at a time so the client can start consuming before the whole file is done.
+    """
+    max_row_len = _int_env("BULK_PREDICT_MAX_ROW_LEN", 10000)
+    batch_size = _int_env("BULK_PREDICT_BATCH_SIZE", 256)
+    valid_rows, skipped = _partition_rows(rows, max_row_len)
+
+    yield json.dumps(
+        {"type": "meta", "model_version": snapshot.version, "total_rows": len(rows)}
+    ) + "\n"
+
+    total = 0
+    spam_count = 0
+    for start in range(0, len(valid_rows), batch_size):
+        chunk = valid_rows[start : start + batch_size]
+        chunk_results, chunk_skipped = _score_batch_isolated(chunk, snapshot)
+        skipped.extend(chunk_skipped)
+        for r in chunk_results:
+            total += 1
+            if r["prediction"].lower() not in ("ham", "safe"):
+                spam_count += 1
+            yield json.dumps({"type": "result", **r}) + "\n"
+
+    for s in skipped:
+        yield json.dumps({"type": "skipped", **s}) + "\n"
+
+    spam_pct = round((spam_count / total) * 100, 2) if total > 0 else 0.0
+    yield json.dumps(
+        {
+            "type": "summary",
+            "total_messages": total,
+            "spam_count": spam_count,
+            "non_spam_count": total - spam_count,
+            "spam_percentage": spam_pct,
+            "skipped_count": len(skipped),
+            "model_version": snapshot.version,
+        }
+    ) + "\n"
+
+
 @bulk_predict_bp.route("/bulk-predict", methods=["POST"])
 @rate_limit(RateLimitPolicy.BULK)
 def bulk_predict():
@@ -276,6 +401,23 @@ def bulk_predict():
         return jsonify({"error": "No file uploaded"}), 400
 
     snapshot = _resolve_snapshot()
+
+    if _wants_ndjson():
+        rows, error = _extract_rows(file)
+        if error:
+            status_code = 413 if "exceeds the limit" in error.lower() else 400
+            return jsonify({"error": error}), status_code
+        if not rows:
+            return jsonify({"error": "No valid messages found in the file."}), 400
+        # Enforce the row cap before opening the stream so it still surfaces as
+        # a normal typed error rather than mid-stream.
+        _enforce_row_cap(rows)
+        return Response(
+            stream_with_context(_iter_ndjson(rows, snapshot)),
+            mimetype=NDJSON_MIMETYPE,
+            headers={"X-Model-Version": str(snapshot.version)},
+        )
+
     results, skipped, error = parse_and_predict_file(file, snapshot)
     if error:
         status_code = 413 if "exceeds the limit" in error.lower() else 400
