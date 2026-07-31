@@ -56,6 +56,11 @@ class ErrorCode(StrEnum):
     TEXT_TOO_LONG = "TEXT_TOO_LONG"
     INVALID_FEEDBACK = "INVALID_FEEDBACK"
     BAD_REQUEST = "BAD_REQUEST"
+    # Aggregate code for the centralized schema validator (issue #1024): used
+    # when a request violates its declared schema and no endpoint-specific code
+    # is a better fit. The offending fields are enumerated in the response's
+    # ``violations`` list so a client sees every problem in one round trip.
+    SCHEMA_VALIDATION_FAILED = "SCHEMA_VALIDATION_FAILED"
 
     # ── Auth / access (PR 1/2) ───────────────────────────────────────────
     FORBIDDEN = "FORBIDDEN"
@@ -77,6 +82,15 @@ class ErrorCode(StrEnum):
 
     # ── Idempotency for mutating endpoints (issue #1022) ─────────────────
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    # ── Bulk prediction (issue #1021) ────────────────────────────────────
+    # BULK_MODEL_UNAVAILABLE / BULK_TOO_MANY_ROWS are fatal (whole request);
+    # the BULK_ROW_* codes are per-row skip reasons returned in the "skipped"
+    # list so one bad row never fails the batch.
+    BULK_MODEL_UNAVAILABLE = "BULK_MODEL_UNAVAILABLE"
+    BULK_TOO_MANY_ROWS = "BULK_TOO_MANY_ROWS"
+    BULK_ROW_EMPTY = "BULK_ROW_EMPTY"
+    BULK_ROW_TOO_LONG = "BULK_ROW_TOO_LONG"
+    BULK_ROW_UNPROCESSABLE = "BULK_ROW_UNPROCESSABLE"
 
     # ── Email / OAuth / IMAP provider paths (PR 2/2) ─────────────────────
     MISSING_USERNAME = "MISSING_USERNAME"

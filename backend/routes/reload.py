@@ -17,6 +17,12 @@ import serving_state
 __all__ = ["register_reload_endpoint"]
 
 
+def _short_checksum(snapshot):
+    """Short model checksum for a snapshot, or ``"unknown"`` when unavailable."""
+    metadata = getattr(snapshot, "metadata", None)
+    return metadata.short_checksum if metadata is not None else "unknown"
+
+
 def register_reload_endpoint(app):
     """Attach ``/reload-model`` and ``/model-status`` to ``app``."""
 
@@ -37,6 +43,7 @@ def register_reload_endpoint(app):
                 401,
             )
 
+        previous = serving_state.STATE.snapshot()
         try:
             snapshot = serving_state.STATE.reload()
         except Exception as e:
@@ -50,6 +57,19 @@ def register_reload_endpoint(app):
                 ),
                 500,
             )
+
+        # Structured provenance audit line (issue #1007 part 2) so a reload is
+        # traceable in the logs: which version bump, and which model bytes went
+        # in and out. "unknown" covers snapshots taken before metadata existed.
+        old_checksum = _short_checksum(previous)
+        new_checksum = _short_checksum(snapshot)
+        app.logger.info(
+            "model reloaded v%d -> v%d (checksum %s -> %s)",
+            previous.version,
+            snapshot.version,
+            old_checksum,
+            new_checksum,
+        )
 
         return (
             jsonify(

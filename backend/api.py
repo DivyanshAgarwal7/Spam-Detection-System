@@ -8,7 +8,6 @@ from   flask_cors               import CORS
 from   functools                import wraps
 import hmac
 import joblib
-import json
 import metrics
 import numpy as np
 import os
@@ -74,9 +73,9 @@ settings = load_settings()
 
 app = Flask(__name__)
 
-# Install the JSON log formatter + request-id filter on the root logger before
-# anything logs, so every line (including app.logger records that propagate
-# here) is structured from the first request (#1006).
+# Install the JSON log formatter + request-id/redaction filters on the root
+# logger before anything logs, so every line (including app.logger records that
+# propagate here) is structured and scrubbed from the first request (#1006).
 configure_logging()
 logger = get_logger("ml_api")
 access_logger = get_logger("ml_api.access")
@@ -115,6 +114,7 @@ PUBLIC_PATHS = {
     "/openapi.json",
     "/docs",
     "/metrics",
+    "/cache-stats",
     "/model-info",
 }
 
@@ -275,8 +275,9 @@ def validate_internal_request(f):
         # Check internal secret
         provided = request.headers.get("X-Internal-Secret", "")
         if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
-            app.logger.warning(
-                f"⚠️  Unauthorized internal request from {request.remote_addr}"
+            logger.warning(
+                "unauthorized_internal_request",
+                extra={"remote_addr": request.remote_addr, "path": request.path},
             )
             return error_response(
                 ErrorCode.FORBIDDEN,
@@ -286,9 +287,9 @@ def validate_internal_request(f):
                 extra={"success": False},
             )
 
-        # Log internal request
-        app.logger.info(
-            f"🔐 [ZERO-TRUST] Internal request to {request.path} from {request.remote_addr}"
+        logger.info(
+            "internal_request",
+            extra={"remote_addr": request.remote_addr, "path": request.path},
         )
         return f(*args, **kwargs)
 
@@ -348,7 +349,7 @@ def ip_allowlist(f):
             client_ip = client_ip.split(",")[0].strip()
 
         if client_ip not in allowed_list:
-            app.logger.warning(f"⚠️  Blocked request from unauthorized IP: {client_ip}")
+            logger.warning("blocked_unauthorized_ip", extra={"client_ip": client_ip})
             return (
                 jsonify(
                     {"success": False, "error": "Access denied from this IP address"}
@@ -380,8 +381,9 @@ def validate_request(f):
                     p in value.lower()
                     for p in ["<script", "javascript:", "onerror", "onload"]
                 ):
-                    app.logger.warning(
-                        f"⚠️  Suspicious query param: {key}={value[:50]}"
+                    logger.warning(
+                        "suspicious_query_param",
+                        extra={"param": key, "value_preview": value[:50]},
                     )
                     return (
                         jsonify(
@@ -398,8 +400,9 @@ def validate_request(f):
 
             data_str = json.dumps(data).lower()
             if any(p in data_str for p in ["<script", "javascript:", "onerror"]):
-                app.logger.warning(
-                    f"⚠️  Suspicious request body from {request.remote_addr}"
+                logger.warning(
+                    "suspicious_request_body",
+                    extra={"remote_addr": request.remote_addr},
                 )
                 return jsonify({"success": False, "error": "Invalid request body"}), 400
 
@@ -435,6 +438,23 @@ def audit_log(action, resource_type):
                 f"📝 [AUDIT] {action.__name__} - Status: {status} - User: {user}"
             )
 
+            # Persist a tamper-evident record in addition to the log line
+            # (issue #1023). Fail-soft: a store outage must never turn an
+            # otherwise-successful request into an error, so any failure is
+            # logged and swallowed here.
+            try:
+                audit_store.append(
+                    actor=user,
+                    action=getattr(action, "__name__", str(action)),
+                    resource=resource_type,
+                    request_id=request_id,
+                    status=status,
+                )
+            except Exception as audit_error:
+                app.logger.warning(
+                    f"⚠️  [AUDIT] failed to persist audit record: {audit_error}"
+                )
+
             return response
 
         return decorated_function
@@ -451,15 +471,31 @@ def _current_request_id():
     return getattr(g, "request_id", "unknown")
 
 
+def _log_error(code, status, message, *, exc_info=False):
+    """Emit one structured error line carrying the stable code + request id."""
+    logger.error(
+        "request_error",
+        exc_info=exc_info,
+        extra={
+            "error_code": ErrorCode(code).value,
+            "status": status,
+            "detail": message,
+            "request_id": _current_request_id(),
+        },
+    )
+
+
 @app.errorhandler(ApiError)
 def handle_api_error(e):
     """Render a raised ApiError through the shared error envelope (#986)."""
+    _log_error(e.code, e.status, e.message)
     return error_response(e.code, e.message, e.status, request_id=_current_request_id())
 
 
 @app.errorhandler(400)
 def handle_bad_request(e):
     message = getattr(e, "description", None) or "Bad request"
+    _log_error(ErrorCode.BAD_REQUEST, 400, message)
     return error_response(
         ErrorCode.BAD_REQUEST, message, 400, request_id=_current_request_id()
     )
@@ -468,6 +504,7 @@ def handle_bad_request(e):
 @app.errorhandler(403)
 def handle_forbidden(e):
     message = getattr(e, "description", None) or "Forbidden"
+    _log_error(ErrorCode.FORBIDDEN, 403, message)
     # success:false is part of the zero-trust JSON shape existing callers read.
     return error_response(
         ErrorCode.FORBIDDEN,
@@ -481,6 +518,7 @@ def handle_forbidden(e):
 @app.errorhandler(404)
 def handle_not_found(e):
     message = getattr(e, "description", None) or "Not found"
+    _log_error(ErrorCode.NOT_FOUND, 404, message)
     return error_response(
         ErrorCode.NOT_FOUND, message, 404, request_id=_current_request_id()
     )
@@ -494,7 +532,7 @@ def handle_internal_error(e):
     if isinstance(e, HTTPException):
         return e
     request_id = _current_request_id()
-    app.logger.exception(f"❌ [Request-ID: {request_id}] Unhandled exception")
+    _log_error(ErrorCode.INTERNAL_ERROR, 500, "Unhandled exception", exc_info=True)
     # Keep the legacy top-level request_id alongside the new envelope so clients
     # that already read it keep working.
     return error_response(
@@ -797,6 +835,14 @@ FEEDBACK_FILE = OUTPUT_DIR / "feedback_store.csv"
 LOG_FILE = OUTPUT_DIR / "api.log"
 FEEDBACK_LABELS = set(label_encoder.classes_)
 
+# Point the centralized request-schema validator (issue #1024) at this
+# deployment's real limits and label classes, so the schemas the endpoints are
+# validated against match what the service actually serves.
+validation.configure(
+    max_message_length=MAX_MESSAGE_LENGTH,
+    feedback_labels=sorted(FEEDBACK_LABELS),
+)
+
 
 # ============================================
 # DISTRIBUTED TRACING
@@ -1001,6 +1047,17 @@ def rate_limit_status():
     )
 
 
+@app.route("/cache-stats", methods=["GET"])
+@validate_request
+def cache_stats():
+    """Observability for the /predict response cache (issue #1008).
+
+    Public (see PUBLIC_PATHS): exposes only aggregate counters (hits, misses,
+    size, evictions, hit rate) -- never any cached message content.
+    """
+    return jsonify(predict_cache.CACHE.stats())
+
+
 # ============================================
 # API DOCUMENTATION (OpenAPI 3.0 + Swagger UI)
 # ============================================
@@ -1119,69 +1176,40 @@ def make_prediction_response(
     return response
 
 
+def _cache_bypass_requested():
+    """True when the caller opts out of the /predict cache for this request.
+
+    Honours the standard ``Cache-Control: no-cache`` request directive and a
+    convenience ``?fresh=1`` query flag, so a client can force a fresh
+    computation (e.g. to confirm a just-reloaded model) without disabling the
+    cache process-wide.
+    """
+    if request.args.get("fresh") == "1":
+        return True
+    cache_control = request.headers.get("Cache-Control", "")
+    return "no-cache" in cache_control.lower()
+
+
 @app.route("/predict", methods=["POST"])
 @validate_request
 @validate_internal_request
 @ip_allowlist
 @rate_limit(RateLimitPolicy.PREDICT)
+@validation.validate_schema("/predict")
 def predict():
     # Initialize final_output to prevent NameError/UnboundLocalError in case of early/conditional references
     final_output = None
 
     try:
-        data = request.get_json(silent=True)
+        # Body shape and the presence/type/length of ``text`` are enforced by
+        # the /predict schema (validation.py); the validated body is handed
+        # through g so we read a guaranteed non-empty string here.
+        data = getattr(g, "schema_body", None)
         if data is None:
-            raw_body = request.get_data(cache=True)
-            if raw_body:
-                # get_json(silent=True) returns None both for malformed JSON
-                # and for the valid JSON literal `null` - tell those apart so
-                # the error message doesn't call a well-formed `null` invalid.
-                try:
-                    json.loads(raw_body)
-                except ValueError:
-                    return error_response(
-                        ErrorCode.INVALID_JSON_BODY,
-                        "Request body must be a valid JSON object",
-                        400,
-                        request_id=_current_request_id(),
-                    )
-                return error_response(
-                    ErrorCode.INVALID_JSON_BODY,
-                    "Request body must be a JSON object, got NoneType",
-                    400,
-                    request_id=_current_request_id(),
-                )
-            data = {}
-        elif not isinstance(data, dict):
-            return error_response(
-                ErrorCode.INVALID_JSON_BODY,
-                f"Request body must be a JSON object, got {type(data).__name__}",
-                400,
-                request_id=_current_request_id(),
-            )
+            data = request.get_json(silent=True) or {}
 
         text = data.get("text")
         input_type = data.get("type", "message")
-
-        if text is None or (isinstance(text, str) and not text.strip()):
-            with open(LOG_FILE, "a") as f:
-                f.write(
-                    f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n"
-                )
-            return error_response(
-                ErrorCode.NO_TEXT_PROVIDED,
-                "No text provided",
-                400,
-                request_id=_current_request_id(),
-            )
-
-        if not isinstance(text, str):
-            return error_response(
-                ErrorCode.INVALID_TEXT_TYPE,
-                f"'text' must be a string, got {type(text).__name__}",
-                400,
-                request_id=_current_request_id(),
-            )
 
         # Read the live serving objects through the shared state so a
         # POST /reload-model hot-swap is picked up here without a restart
@@ -1189,21 +1217,28 @@ def predict():
         # label encoder mutually consistent even if a reload lands mid-request.
         serving = serving_state.STATE.snapshot()
 
-        # Maximum-length validation before any vectorization/inference work.
-        if len(text) > MAX_MESSAGE_LENGTH:
-            return error_response(
-                ErrorCode.TEXT_TOO_LONG,
-                (
-                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
-                    f"characters (got {len(text)})"
-                ),
-                400,
-                request_id=_current_request_id(),
-            )
-
         original_text = text
         detected_language = "en"
         translated = False
+
+        # Content-addressed response cache (issue #1008). Key on the normalised
+        # input plus the live serving version, so a model hot-swap (which bumps
+        # serving_state.version) transparently invalidates every prior entry and
+        # a stale model can never serve a cached answer. Look up before any of
+        # the expensive translation / analysis / inference work below; refresh
+        # the entry on a miss (and on an explicit bypass, so a forced-fresh
+        # request also repopulates the cache).
+        cache_options = {"type": input_type}
+        cache_key = predict_cache.make_cache_key(
+            normalizer.normalize(text), serving.version, cache_options
+        )
+        cache_bypass = _cache_bypass_requested()
+        if not cache_bypass:
+            cached_body = predict_cache.CACHE.get(cache_key)
+            if cached_body is not None:
+                response = jsonify(cached_body)
+                response.headers["X-Cache"] = "HIT"
+                return response
 
         if input_type != "url" and text.strip():
             try:
@@ -1326,9 +1361,19 @@ def predict():
             severity=severity,
         )
 
+        # Provenance (issue #1007 part 2): tag every prediction with the version
+        # and short checksum of the exact model set that produced it, so a result
+        # can be traced back to a specific deployed/reloaded model.
+        response_data["model_version"] = serving.version
+        if serving.metadata is not None:
+            response_data["model_checksum"] = serving.metadata.short_checksum
+
         metrics.record_prediction(result=final_output, input_type=input_type)
 
-        return jsonify(response_data)
+        predict_cache.CACHE.set(cache_key, response_data)
+        response = jsonify(response_data)
+        response.headers["X-Cache"] = "MISS"
+        return response
 
     except Exception as e:
         request_id = getattr(g, "request_id", "unknown")
@@ -1473,13 +1518,20 @@ def get_word_of_the_day():
 @app.route("/importance", methods=["GET"])
 @validate_request
 @validate_internal_request
+@validation.validate_schema("/importance")
 def get_feature_importance():
     try:
+        snapshot = serving_state.STATE.snapshot()
         top_features = [
             {"feature": word, "importance": score}
-            for word, score in serving_state.STATE.snapshot().xai_service.get_global_importance()
+            for word, score in snapshot.xai_service.get_global_importance()
         ]
-        return jsonify({"top_features": top_features})
+        # Same provenance tag as /predict (issue #1007 part 2): the importances
+        # belong to a specific model version, not the endpoint in the abstract.
+        response = {"top_features": top_features, "model_version": snapshot.version}
+        if snapshot.metadata is not None:
+            response["model_checksum"] = snapshot.metadata.short_checksum
+        return jsonify(response)
     except Exception as e:
         app.logger.error(f"Failed to compute feature importance: {e}")
         return error_response(
@@ -1494,19 +1546,17 @@ def get_feature_importance():
 @validate_request
 @validate_internal_request
 @idempotent
+@validation.validate_schema("/feedback")
 def feedback():
-    data = request.get_json(silent=True) or {}
+    # Non-empty ``text`` and a ``correct_label`` within the model's known
+    # classes are enforced by the /feedback schema (validation.py), which
+    # answers the same INVALID_FEEDBACK envelope for any bad field.
+    data = getattr(g, "schema_body", None)
+    if data is None:
+        data = request.get_json(silent=True) or {}
     text = str(data.get("text", "")).strip()
     predicted_label = str(data.get("predicted_label", "")).strip()
     correct_label = str(data.get("correct_label", "")).strip()
-
-    if not text or correct_label not in FEEDBACK_LABELS:
-        return error_response(
-            ErrorCode.INVALID_FEEDBACK,
-            "Invalid feedback data",
-            400,
-            request_id=_current_request_id(),
-        )
 
     lock_path = str(FEEDBACK_FILE) + ".lock"
 
@@ -1551,6 +1601,7 @@ def feedback():
 @app.route("/feedback/stats", methods=["GET"])
 @validate_request
 @validate_internal_request
+@validation.validate_schema("/feedback/stats")
 def feedback_stats():
     """Aggregate view of submitted feedback (issue #823): the /feedback
     endpoint has always been write-only, with no way to see what's been
@@ -1688,10 +1739,19 @@ def analyze_email_header():
 
 @app.route("/spam-insights", methods=["GET"])
 @validate_request
+@validation.validate_schema("/spam-insights")
 def get_insights():
     try:
-        limit = request.args.get("limit", default=10, type=int)
-        category = request.args.get("category", default=None, type=str)
+        # limit/category come from the /spam-insights query schema
+        # (validation.py), which coerces limit to int with the same lenient
+        # fallback the endpoint has always used.
+        query = getattr(g, "schema_query", None)
+        if query is None:
+            limit = request.args.get("limit", default=10, type=int)
+            category = request.args.get("category", default=None, type=str)
+        else:
+            limit = query.get("limit", 10)
+            category = query.get("category", None)
         from spam_insights import get_spam_insights
 
         insights = get_spam_insights(limit=limit, category=category)
@@ -1948,6 +2008,7 @@ def scan_emails_route():
 
 imap_store.init_db()
 oauth_store.init_db()
+audit_store.init_db()
 init_spam_words_db()
 scheduler = BackgroundScheduler()
 scheduler.start()
