@@ -5,21 +5,28 @@ contract: ``info``, ``servers``, the ``X-Internal-Secret`` security scheme,
 and ``paths``/``components`` for the API's routes. It is served verbatim at
 ``GET /openapi.json`` and rendered by the Swagger UI at ``GET /docs``.
 
-The document is deliberately hand-written rather than generated from the
-route table: the ``/predict`` response has a rich, evolving shape
-(``confidence``, ``domain_analysis``, ``url_risk``, ``explanation``,
-``severity``, ...) that a decorator-based generator would not capture
-faithfully. To keep the hand-authored spec honest, ``test_openapi_coverage``
-asserts every non-static registered rule is documented here.
+Response shapes stay hand-written: the ``/predict`` response has a rich,
+evolving shape (``confidence``, ``domain_analysis``, ``url_risk``,
+``explanation``, ``severity``, ...) that a generator would not capture
+faithfully. Request bodies and query parameters, however, are generated from
+the same :mod:`validation` schema registry that enforces them at runtime
+(issue #1024), so the documented request contract cannot drift from what the
+service actually accepts. To keep the hand-authored parts honest,
+``test_openapi_coverage`` asserts every non-static registered rule is
+documented here.
 
 >>> spec = build_spec()
 >>> spec["openapi"]
 '3.0.3'
 >>> "/predict" in spec["paths"]
 True
+>>> body = spec["paths"]["/predict"]["post"]["requestBody"]
+>>> body["content"]["application/json"]["schema"]["required"]
+['text']
 """
 
 from __future__ import annotations
+
 
 __all__ = ["build_spec"]
 
@@ -55,6 +62,11 @@ def build_spec():
     paths = {}
     paths.update(_core_paths())
     paths.update(_extended_paths())
+
+    # Overwrite the request bodies/parameters of any documented path that has a
+    # registered validation schema, so the served contract is generated from
+    # the exact definitions used to enforce requests (single source of truth).
+    _apply_registered_schemas(paths)
 
     schemas = {}
     schemas.update(_core_schemas())
@@ -146,6 +158,28 @@ def _core_paths():
                 "summary": "Classify a message or URL",
                 "operationId": "predict",
                 "tags": ["Prediction"],
+                "description": (
+                    "Responses are served from a content-addressed cache keyed "
+                    "by the normalised input, the prediction options and the "
+                    "live model version; a model hot-swap invalidates it. Send "
+                    "`Cache-Control: no-cache` or `?fresh=1` to bypass the "
+                    "lookup and force a fresh computation. The `X-Cache` "
+                    "response header reports whether the body was served from "
+                    "cache."
+                ),
+                "parameters": [
+                    {
+                        "name": "fresh",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string", "enum": ["1"]},
+                        "description": (
+                            "Set to '1' to bypass the response cache and force "
+                            "a fresh computation (equivalent to sending "
+                            "Cache-Control: no-cache)."
+                        ),
+                    },
+                ],
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -155,11 +189,20 @@ def _core_paths():
                     },
                 },
                 "responses": {
-                    "200": _json_response(
-                        "Prediction result with confidence, URL risk and "
-                        "explanation details.",
-                        {"$ref": "#/components/schemas/PredictionResponse"},
-                    ),
+                    "200": {
+                        "description": (
+                            "Prediction result with confidence, URL risk and "
+                            "explanation details."
+                        ),
+                        "headers": {"X-Cache": _x_cache_header()},
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PredictionResponse"
+                                }
+                            }
+                        },
+                    },
                     "400": _error_response("Missing/invalid text or body."),
                     "403": _error_response("Missing or invalid internal secret."),
                     "500": _error_response("Inference error."),
@@ -395,6 +438,17 @@ def _core_schemas():
                     "description": "Computed spam severity summary.",
                     "additionalProperties": True,
                 },
+                "model_version": {
+                    "type": "integer",
+                    "description": (
+                        "Version of the model set that produced this prediction "
+                        "(issue #1007); increments on each /reload-model."
+                    ),
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of the model that produced this prediction.",
+                },
             },
             "required": [
                 "input",
@@ -497,7 +551,15 @@ def _core_schemas():
                             "importance": {"type": "number"},
                         },
                     },
-                }
+                },
+                "model_version": {
+                    "type": "integer",
+                    "description": "Version of the model these importances belong to (issue #1007).",
+                },
+                "model_checksum": {
+                    "type": "string",
+                    "description": "Short SHA-256 of that model.",
+                },
             },
         },
         "EmailHeaderRequest": {
@@ -620,6 +682,18 @@ def _extended_paths():
                     "403": _error_response(
                         "Caller is not admin or lacks the internal secret."
                     ),
+        "/cache-stats": {
+            "get": {
+                "summary": "/predict response cache statistics",
+                "operationId": "getCacheStats",
+                "tags": ["System"],
+                "security": [],
+                "responses": {
+                    "200": _json_response(
+                        "Aggregate hit/miss/size counters for the /predict "
+                        "response cache (never any cached content).",
+                        {"$ref": "#/components/schemas/CacheStats"},
+                    )
                 },
             }
         },
@@ -1014,6 +1088,20 @@ def _extended_paths():
 
 def _extended_schemas():
     return {
+        "CacheStats": {
+            "type": "object",
+            "description": "Aggregate counters for the /predict response cache.",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "hits": {"type": "integer"},
+                "misses": {"type": "integer"},
+                "size": {"type": "integer"},
+                "max_size": {"type": "integer"},
+                "ttl_seconds": {"type": "number"},
+                "evictions": {"type": "integer"},
+                "hit_rate": {
+                    "type": "number",
+                    "description": "hits / (hits + misses), rounded to 4 dp.",
         "ArtifactInfo": {
             "type": "object",
             "description": "Content fingerprint of one model artifact.",
@@ -1176,6 +1264,16 @@ def _error_response(description):
     return _json_response(description, _ERROR)
 
 
+def _x_cache_header():
+    return {
+        "description": (
+            "Whether the body was served from the /predict response cache: "
+            "HIT (cached) or MISS (freshly computed)."
+        ),
+        "schema": {"type": "string", "enum": ["HIT", "MISS"]},
+    }
+
+
 def _query_param(name, description, required=False, schema=None):
     return {
         "name": name,
@@ -1209,3 +1307,103 @@ def _file_upload_body():
             }
         },
     }
+
+
+# ============================================================================
+# Generation from the validation schema registry (issue #1024, PR 2/2).
+# ============================================================================
+
+
+def _apply_registered_schemas(paths):
+    """Replace request bodies/params on documented paths from the registry.
+
+    Only the ``application/json`` request-body schema is overwritten, so a path
+    that also accepts another media type (e.g. a multipart .eml upload) keeps
+    it. Response definitions are left untouched.
+    """
+    for endpoint, schema in registered_schemas().items():
+        operations = paths.get(endpoint)
+        if not operations:
+            continue
+        for method, operation in operations.items():
+            if not isinstance(operation, dict):
+                continue
+            if schema.body is not None and schema.body.fields:
+                _set_json_request_body(operation, schema.body)
+            if schema.query is not None and schema.query.fields:
+                operation["parameters"] = _query_parameters(schema.query)
+
+
+def _set_json_request_body(operation, body):
+    request_body = operation.setdefault("requestBody", {"required": True})
+    content = request_body.setdefault("content", {})
+    json_entry = content.setdefault("application/json", {})
+    json_entry["schema"] = _object_schema(body.fields)
+
+
+def _object_schema(fields):
+    properties = {}
+    required = []
+    for rule in fields:
+        properties[rule.name] = _field_property(rule)
+        if _is_required(rule):
+            required.append(rule.name)
+    schema = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _query_parameters(query):
+    parameters = []
+    for rule in query.fields:
+        schema = {}
+        if rule.type is not None:
+            schema["type"] = rule.type
+        if rule.enum is not None:
+            schema["enum"] = list(rule.enum)
+        if rule.default is not None:
+            schema["default"] = rule.default
+        parameters.append(
+            {
+                "name": rule.name,
+                "in": "query",
+                "required": bool(rule.enforced and rule.required),
+                "schema": schema or {"type": "string"},
+                "description": rule.description,
+            }
+        )
+    return parameters
+
+
+def _field_property(rule):
+    prop = {}
+    if rule.type is not None:
+        prop["type"] = rule.type
+    if rule.enum is not None:
+        prop["enum"] = list(rule.enum)
+    if rule.default is not None:
+        prop["default"] = rule.default
+    if rule.min_length is not None:
+        prop["minLength"] = rule.min_length
+    if rule.max_length is not None:
+        prop["maxLength"] = rule.max_length
+    if rule.description:
+        prop["description"] = rule.description
+    return prop
+
+
+def _is_required(rule):
+    """Whether a body field must be supplied for the request to be valid.
+
+    A field is required when it is enforced and either declared required /
+    non-empty, or constrained to an enum with no default (so a valid value must
+    be sent explicitly).
+    """
+    if not rule.enforced:
+        return False
+    return bool(
+        rule.required
+        or rule.non_empty
+        or (rule.enum is not None and rule.default is None)
+    )

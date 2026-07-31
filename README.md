@@ -55,6 +55,25 @@ Both endpoints are public (no `X-Internal-Secret` required). A coverage test
 (`backend/tests/test_openapi_coverage.py`) asserts every registered route is
 documented, so the spec never drifts from the code.
 
+### `/predict` response cache
+
+`POST /predict` is fronted by an in-process, content-addressed response cache
+(`backend/predict_cache.py`). The cache key is `sha256` of the *normalised*
+input text (via `utils/text_normalizer`) combined with the prediction options
+and the live model version, so:
+
+* repeated identical requests skip the full inference pipeline and return the
+  cached body, and
+* a `POST /reload-model` hot-swap bumps the serving version and transparently
+  invalidates every prior entry — a stale model can never serve a cached answer.
+
+Each response carries an `X-Cache: HIT|MISS` header. Send `Cache-Control:
+no-cache` or `?fresh=1` to bypass the lookup and force a fresh computation.
+Aggregate counters (hits, misses, size, evictions, hit rate — never any cached
+content) are exposed at the public `GET /cache-stats`. The cache is bounded by
+TTL and LRU eviction and configured via `PREDICT_CACHE_ENABLED`,
+`PREDICT_CACHE_MAX_SIZE` and `PREDICT_CACHE_TTL_SECONDS`.
+
 ---
 ## 🧾 Model Registry & Provenance
 
@@ -95,6 +114,19 @@ per-artifact `checksums`, and the full `metadata`:
 `metadata` is `null` when no provenance is available (e.g. a test harness that
 installs bare fakes). Dropping a `model_card.json` next to the model artifact is
 the only step needed to populate `trained_at` / `metrics` / `labels`.
+
+### Prediction & reload provenance
+
+`/predict` and `/importance` responses carry an additive `model_version` (and a
+short `model_checksum` when provenance is available) identifying the model set
+that served the request — existing fields are unchanged, so this is backward
+compatible. On every `/reload-model`, a structured audit line is logged:
+
+```
+model reloaded v2 -> v3 (checksum 1c7a… -> 9f2b…)
+```
+
+so a version bump and the model bytes going in and out are visible in the logs.
 
 ---
 ## System Stability & Environment Fixes
@@ -529,6 +561,25 @@ call site:
 * Use `get_logger(name)` to obtain a module logger; records flow through the
   configured root. `configure_logging()` is idempotent, so a reimport or a test
   that loads the app twice never double-emits.
+
+### Redaction
+
+Before a record is formatted it passes through a `RedactionFilter` that scrubs
+sensitive material to `***`, so a token or address accidentally handed to a log
+call never reaches the sink in the clear. It covers:
+
+* the `X-Internal-Secret` value,
+* OAuth **access / refresh tokens** and HTTP `Bearer` tokens,
+* threat-intel **API keys** (`SAFE_BROWSING_API_KEY`, `VIRUSTOTAL_API_KEY`),
+* **email addresses** and message bodies.
+
+Both the rendered message and string-valued structured fields are cleaned.
+Exact secret values present in the environment at startup are additionally
+scrubbed literally, catching a bare value logged without a recognisable key.
+
+Contract coverage lives in `backend/tests/test_logging.py`: every emitted record
+is valid JSON with a `request_id`, the id propagates from the header, and a
+known secret / token / email never survives to the output.
 
 ---
 
