@@ -55,6 +55,25 @@ Both endpoints are public (no `X-Internal-Secret` required). A coverage test
 (`backend/tests/test_openapi_coverage.py`) asserts every registered route is
 documented, so the spec never drifts from the code.
 
+### `/predict` response cache
+
+`POST /predict` is fronted by an in-process, content-addressed response cache
+(`backend/predict_cache.py`). The cache key is `sha256` of the *normalised*
+input text (via `utils/text_normalizer`) combined with the prediction options
+and the live model version, so:
+
+* repeated identical requests skip the full inference pipeline and return the
+  cached body, and
+* a `POST /reload-model` hot-swap bumps the serving version and transparently
+  invalidates every prior entry — a stale model can never serve a cached answer.
+
+Each response carries an `X-Cache: HIT|MISS` header. Send `Cache-Control:
+no-cache` or `?fresh=1` to bypass the lookup and force a fresh computation.
+Aggregate counters (hits, misses, size, evictions, hit rate — never any cached
+content) are exposed at the public `GET /cache-stats`. The cache is bounded by
+TTL and LRU eviction and configured via `PREDICT_CACHE_ENABLED`,
+`PREDICT_CACHE_MAX_SIZE` and `PREDICT_CACHE_TTL_SECONDS`.
+
 ---
 ## 🧾 Model Registry & Provenance
 
