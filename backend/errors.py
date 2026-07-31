@@ -75,6 +75,16 @@ class ErrorCode(StrEnum):
     # ── Readiness / graceful shutdown (issue #1009) ──────────────────────
     NOT_READY = "NOT_READY"
 
+    # ── Bulk prediction (issue #1021) ────────────────────────────────────
+    # BULK_MODEL_UNAVAILABLE / BULK_TOO_MANY_ROWS are fatal (whole request);
+    # the BULK_ROW_* codes are per-row skip reasons returned in the "skipped"
+    # list so one bad row never fails the batch.
+    BULK_MODEL_UNAVAILABLE = "BULK_MODEL_UNAVAILABLE"
+    BULK_TOO_MANY_ROWS = "BULK_TOO_MANY_ROWS"
+    BULK_ROW_EMPTY = "BULK_ROW_EMPTY"
+    BULK_ROW_TOO_LONG = "BULK_ROW_TOO_LONG"
+    BULK_ROW_UNPROCESSABLE = "BULK_ROW_UNPROCESSABLE"
+
     # ── Email / OAuth / IMAP provider paths (PR 2/2) ─────────────────────
     MISSING_USERNAME = "MISSING_USERNAME"
     MISSING_AUTH_CODE = "MISSING_AUTH_CODE"
