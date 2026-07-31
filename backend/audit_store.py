@@ -9,10 +9,17 @@ record and of every record that follows it. :func:`verify_chain` recomputes the
 chain end to end and reports whether it is intact, giving operators a cheap
 integrity check over the whole trail.
 
+Records are otherwise immutable and append-only. The one sanctioned mutation is
+:func:`prune`, which enforces a retention window by deleting expired records and
+then re-links the survivors from the genesis anchor so the retained trail keeps
+verifying. :func:`query` exposes the trail for the admin-only ``GET /audit``
+endpoint with field filters, a time window and pagination.
+
 The store is deliberately dependency-free (stdlib ``sqlite3`` only) and is meant
-to be called fail-soft: a write failure must never break the request being
-audited (see ``api.audit_log``). The database location is configurable via
-``AUDIT_DB_PATH`` so deployments can point it at durable storage.
+to be called fail-soft on the write path: a write failure must never break the
+request being audited (see ``api.audit_log``). The database location is
+configurable via ``AUDIT_DB_PATH`` and the retention window via
+``AUDIT_RETENTION_DAYS``.
 
 >>> import os, tempfile
 >>> db = os.path.join(tempfile.mkdtemp(), "audit.db")
@@ -22,7 +29,7 @@ audited (see ``api.audit_log``). The database location is configurable via
 True
 """
 
-from   datetime                 import datetime, timezone
+from   datetime                 import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -32,10 +39,14 @@ import sqlite3
 __all__ = [
     "GENESIS_HASH",
     "DB_PATH",
+    "DEFAULT_RETENTION_DAYS",
+    "MAX_QUERY_LIMIT",
     "get_db_connection",
     "init_db",
     "append",
     "verify_chain",
+    "query",
+    "prune",
 ]
 
 # Default location for the audit database. Overridable so deployments can point
@@ -45,6 +56,14 @@ DB_PATH = os.getenv(
     str(Path(__file__).resolve().parent / "audit_log.db"),
 )
 
+# Age (in days) beyond which records are eligible for pruning when a caller does
+# not pass an explicit window. A non-positive value disables pruning.
+DEFAULT_RETENTION_DAYS = int(os.getenv("AUDIT_RETENTION_DAYS", "90"))
+
+# Upper bound on how many records a single query may return, so a caller cannot
+# ask for an unbounded page.
+MAX_QUERY_LIMIT = 1000
+
 # prev_hash of the first record. A fixed, all-zero digest anchors the chain so
 # the genesis record is verified with the same rule as every later one.
 GENESIS_HASH = "0" * 64
@@ -53,6 +72,9 @@ GENESIS_HASH = "0" * 64
 # because it is assigned by SQLite on insert and is not part of the signed
 # payload; ordering/deletion is instead caught by the prev_hash linkage.
 _HASHED_FIELDS = ("actor", "action", "resource", "request_id", "status", "timestamp")
+
+# Columns a caller may filter ``query`` on by exact match.
+_FILTER_COLUMNS = ("actor", "action", "resource")
 
 
 def get_db_connection(db_path=None):
@@ -156,6 +178,111 @@ def verify_chain(db_path=None):
             return False
         running_prev = row["record_hash"]
     return True
+
+
+def query(
+    actor=None,
+    action=None,
+    resource=None,
+    since=None,
+    until=None,
+    limit=100,
+    offset=0,
+    db_path=None,
+):
+    """Return stored records, newest first, matching the given filters.
+
+    ``actor``/``action``/``resource`` are exact-match filters. ``since`` and
+    ``until`` bound the ``timestamp`` column (inclusive) and are compared as
+    ISO-8601 UTC strings, whose lexical order matches chronological order.
+    ``limit`` is clamped to :data:`MAX_QUERY_LIMIT` and ``offset`` to a
+    non-negative value. Each result is a plain ``dict`` of all columns.
+    """
+    init_db(db_path)
+
+    clauses = []
+    params = []
+    for column, value in (
+        ("actor", actor),
+        ("action", action),
+        ("resource", resource),
+    ):
+        if value is not None:
+            clauses.append(f"{column} = ?")
+            params.append(str(value))
+    if since is not None:
+        clauses.append("timestamp >= ?")
+        params.append(str(since))
+    if until is not None:
+        clauses.append("timestamp <= ?")
+        params.append(str(until))
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    safe_limit = max(1, min(int(limit), MAX_QUERY_LIMIT))
+    safe_offset = max(0, int(offset))
+    params.extend([safe_limit, safe_offset])
+
+    with get_db_connection(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM audit_records
+            {where}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def prune(retention_days=None, now=None, db_path=None):
+    """Delete records older than the retention window and re-seal the chain.
+
+    ``retention_days`` defaults to :data:`DEFAULT_RETENTION_DAYS`; a
+    non-positive window disables pruning and returns ``0``. Records whose
+    ``timestamp`` predates ``now - retention_days`` are removed, then the
+    surviving records are re-linked from the genesis anchor so
+    :func:`verify_chain` continues to pass over the retained trail. Returns the
+    number of records deleted.
+    """
+    days = DEFAULT_RETENTION_DAYS if retention_days is None else int(retention_days)
+    if days <= 0:
+        return 0
+
+    init_db(db_path)
+    reference = now or datetime.now(timezone.utc)
+    cutoff = (reference - timedelta(days=days)).isoformat()
+
+    with get_db_connection(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM audit_records WHERE timestamp < ?", (cutoff,)
+        )
+        deleted = cursor.rowcount
+        if deleted:
+            _reseal(conn)
+        conn.commit()
+    return deleted
+
+
+def _reseal(conn):
+    """Recompute prev_hash/record_hash for every surviving record in order.
+
+    Pruning removes the oldest links, which would otherwise strand the earliest
+    survivor's ``prev_hash``. Re-sealing walks the remaining rows from the
+    genesis anchor and rewrites their linkage so the retained trail is once
+    again a valid chain. This is the only place stored hashes are rewritten and
+    it runs only as part of sanctioned retention maintenance.
+    """
+    rows = conn.execute("SELECT * FROM audit_records ORDER BY id ASC").fetchall()
+    running_prev = GENESIS_HASH
+    for row in rows:
+        record = {k: row[k] for k in _HASHED_FIELDS}
+        record_hash = _compute_hash(running_prev, record)
+        conn.execute(
+            "UPDATE audit_records SET prev_hash = ?, record_hash = ? WHERE id = ?",
+            (running_prev, record_hash, row["id"]),
+        )
+        running_prev = record_hash
 
 
 def _canonical(record):
