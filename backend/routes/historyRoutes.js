@@ -45,6 +45,27 @@ router.get('/recent',protect, async(req,res)=> {
   }
     });
 
+const getStatsSummary = async (req, res) => {
+  try {
+    const stats = await History.aggregate([
+      { $match: { user: req.user.id } },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            prediction: "$prediction"
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id.date": 1 } }
+    ]);
+    res.json(stats);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to compile statistics" });
+  }
+};
+
 router.get('/',protect,async(req,res) => {
   try{
     const{startDate, endDate, limit =50 } =req.query;

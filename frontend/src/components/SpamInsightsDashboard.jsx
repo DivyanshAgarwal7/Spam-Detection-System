@@ -4,6 +4,7 @@ import api from "../utils/axiosInstance";
 import { SpamTrends } from './SpamTrends';
 import { RecentActivity } from './RecentActivity';
 import { AccuracyMeter } from './AccuracyMeter';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 
 export default function SpamInsightsDashboard() {
@@ -156,6 +157,17 @@ export default function SpamInsightsDashboard() {
                 </table>
               </div>
             </div>
+
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData}>
+               <CartesianGrid strokeDasharray="3 3" />
+               <XAxis dataKey="date" />
+               <YAxis />
+               <Tooltip />
+               <Line type="monotone" dataKey="spam" stroke="#ef4444" strokeWidth={2} />
+               <Line type="monotone" dataKey="ham" stroke="#22c55e" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
 
             {/* Trending Phrases */}
             <div>
