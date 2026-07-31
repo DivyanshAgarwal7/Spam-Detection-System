@@ -6,7 +6,7 @@ import { Eye, EyeOff } from "lucide-react";
 import api from "../utils/axiosInstance";
 import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
-import SpamLogo from "../assets/SpamLogo.png";
+import SpamLogo from '../assets/SpamLogo.png';
 
 import "../App.css";
 
