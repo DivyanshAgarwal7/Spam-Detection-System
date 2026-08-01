@@ -14,7 +14,6 @@ import WordCloud from "../components/WordCloud";
 import ManipulationIndex from './ManipulationIndex';
 import FeedbackWidget from "../components/FeedbackWidget";
 import Login from "./Login.jsx";
-import { OnboardingTour } from './components/OnboardingTour';
 import DeSpamify from '../components/DeSpamify';
 import confetti from 'canvas-confetti';
 import Register from "./Register.jsx";
@@ -34,6 +33,14 @@ import RulesManager from "../components/RulesManager";
 import AdminRulesManager from "../components/AdminRulesManager";
 import AdminFeedbackView from "../components/AdminFeedbackView";
 
+// ============================================
+// CONSTANTS - Character Counter (Issue #947)
+// ============================================
+
+const MAX_CHAR_LIMIT = 5000;
+const WARNING_CHAR_LIMIT = 500;
+const CHARS_WARNING_LEVEL = 400; // 80% of 500
+
 function App() {
   const navigate = useNavigate();
   const [text, setText] = useState("");
@@ -43,6 +50,8 @@ function App() {
   const [severity, setSeverity] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [urlRisk, setUrlRisk] = useState(null);
+  const [aiExplanation, setAiExplanation] = useState("");
+  const [loadingAiExplanation, setLoadingAiExplanation] = useState(false);
   const [loading, setLoading] = useState(false);
   const [type, setType] = useState("message");
   const [errorInfo, setErrorInfo] = useState(null);
@@ -361,6 +370,7 @@ const analyzeEmojiSentiment = (text) => {
     }
     setLastCall(now);
     setRateLimitError('');
+    setAiExplanation("");
   
     if (loading) return;
       try {
@@ -424,6 +434,21 @@ const analyzeEmojiSentiment = (text) => {
     }
   };
 
+  const fetchAiExplanation = async () => {
+    if (!text || !result) return;
+    setLoadingAiExplanation(true);
+    setAiExplanation("");
+    try {
+      const response = await api.post("/api/predict/explain", {
+        text,
+        prediction: result
+      });
+      setAiExplanation(response.data.explanation);
+    } catch (error) {
+      console.error("Failed to fetch AI explanation:", error);
+      setAiExplanation("Failed to load explanation. Please check your network or Groq API configuration.");
+    } finally {
+      setLoadingAiExplanation(false);
   // ============================================
   // ✅ HANDLE CLEAR BUTTON (Issue #948)
   // ============================================
@@ -457,7 +482,7 @@ const analyzeEmojiSentiment = (text) => {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (!loading && text.trim().length > 0 && text.length <= 5000) {
+      if (!loading && text.trim().length > 0 && text.length <= MAX_CHAR_LIMIT) {
         handlePredict();
       }
     }
@@ -761,6 +786,7 @@ const analyzeEmojiSentiment = (text) => {
                   <textarea
                     className={`w-full border p-4 pr-12 rounded-2xl focus:outline-none focus:ring-2 resize-none text-sm sm:text-base transition-all shadow-inner leading-relaxed [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full ${isDark ? `${activeTheme.inputDark} focus:border-blue-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-700 hover:[&::-webkit-scrollbar-thumb]:bg-slate-600` : `${activeTheme.input} focus:border-indigo-500/50 [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400`}`}
                     rows="5"
+                    maxLength={MAX_CHAR_LIMIT}
                     placeholder={type === "url" ? "Paste or type the suspicious website link URL here to test..." : type === "message" ? "Type your SMS or chat message content here for inspection..." : "Paste the full text or body of your email content here..."}
                     value={text}
                     onChange={(e) => {
@@ -773,14 +799,14 @@ const analyzeEmojiSentiment = (text) => {
                       // ✅ Plain Enter key support (Issue #946)
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        if (!loading && text.trim().length > 0 && text.length <= 5000) {
+                        if (!loading && text.trim().length > 0 && text.length <= MAX_CHAR_LIMIT) {
                           handlePredict();
                         }
                       }
                       // Support Ctrl+Enter (Windows/Linux) and Cmd+Enter (macOS)
                       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                         e.preventDefault();
-                        if (!loading && text.trim().length > 0 && text.length <= 5000) {
+                        if (!loading && text.trim().length > 0 && text.length <= MAX_CHAR_LIMIT) {
                           handlePredict();
                         }
                       }
@@ -812,24 +838,29 @@ const analyzeEmojiSentiment = (text) => {
                     </div>
                   )}
 
+                  {/* ============================================
+                      ✅ ENHANCED CHARACTER COUNTER (Issue #947)
+                      ============================================ */}
                   {text && (
                     <div className="flex flex-wrap justify-between items-center mt-1.5 px-1 text-xs font-medium tracking-wide opacity-70 gap-1">
                       <div className="flex flex-wrap gap-3">
-                       <span>📖 {calculateReadingTime(text)}</span>
-                      <span>📝 {getTextStats(text).words} words</span>
-                      <span>📏 Avg {getTextStats(text).avgWordLength} chars</span>
-                      <span>📄 {getTextStats(text).sentences} sentences</span>
+                        <span>📖 {calculateReadingTime(text)}</span>
+                        <span>📝 {getTextStats(text).words} words</span>
+                        <span>📏 Avg {getTextStats(text).avgWordLength} chars</span>
+                        <span>📄 {getTextStats(text).sentences} sentences</span>
+                      </div>
+                      {text.length > MAX_CHAR_LIMIT ? (
+                        <span className="text-red-500 font-bold animate-pulse">
+                          {text.length.toLocaleString()} / {MAX_CHAR_LIMIT.toLocaleString()} characters ⚠️
+                        </span>
+                      ) : (
+                        <span className={text.length > WARNING_CHAR_LIMIT ? "text-orange-500 font-semibold" : "text-slate-400 dark:text-slate-500"}>
+                          {text.length.toLocaleString()} / {MAX_CHAR_LIMIT.toLocaleString()} characters
+                          {text.length > WARNING_CHAR_LIMIT && ` (${MAX_CHAR_LIMIT - text.length} remaining)`}
+                        </span>
+                      )}
                     </div>
-                    {text.length > 5000 ? (
-                      <span className="text-red-500 font-bold">
-                        {Math.max(0, text.length).toLocaleString()} / 5000 characters (Limit exceeded)
-                      </span>
-                    ) : (
-                      <span className={text.length > 500 ? "text-orange-500" : ""}>
-                        {Math.max(0, text.length).toLocaleString()} characters
-                      </span>
-                    )}
-                  </div>)}
+                  )}
 
                 </div>
 
@@ -838,7 +869,7 @@ const analyzeEmojiSentiment = (text) => {
                     if (!text.trim()) return;
                     handlePredict();
                   }}
-                  disabled={loading || text.trim().length === 0 || text.length > 5000}
+                  disabled={loading || text.trim().length === 0 || text.length > MAX_CHAR_LIMIT}
                   className={`mt-2 w-full py-3.5 rounded-xl font-bold text-white shadow-md active:scale-95 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${activeTheme.accent}`}
                 >
                   {loading && (
@@ -929,6 +960,58 @@ const analyzeEmojiSentiment = (text) => {
                       result={result} 
                       darkMode={isDark} 
                      />
+                    )}
+
+                    {/* Groq-powered AI Explanation */}
+                    {result && result !== "Error" && (
+                      <div className="mt-4 text-left">
+                        {!aiExplanation && !loadingAiExplanation && (
+                          <button
+                            onClick={fetchAiExplanation}
+                            className={`w-full py-3 px-4 rounded-2xl border text-sm font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${
+                              isDark
+                                ? "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200"
+                                : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+                            }`}
+                          >
+                            ❓ Why was this classified as {result}?
+                          </button>
+                        )}
+
+                        {loadingAiExplanation && (
+                          <div className={`p-4 rounded-2xl border animate-pulse ${
+                            isDark ? "bg-slate-800/60 border-slate-700" : "bg-slate-50 border-slate-200"
+                          }`}>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-slate-500 text-xs">🤖 Loading AI Explanation...</span>
+                            </div>
+                            <div className="h-4 bg-slate-300 dark:bg-slate-700 rounded w-5/6 mb-2"></div>
+                            <div className="h-4 bg-slate-300 dark:bg-slate-700 rounded w-3/4"></div>
+                          </div>
+                        )}
+
+                        {aiExplanation && (
+                          <div className={`p-5 rounded-2xl border text-sm leading-relaxed transition-all duration-500 shadow-sm ${
+                            isDark 
+                              ? "bg-slate-800/60 border-slate-700 text-slate-300" 
+                              : "bg-slate-50 border-slate-200 text-slate-600"
+                          }`}>
+                            <div className="flex items-center justify-between gap-2 mb-3">
+                              <span className="font-bold text-xs uppercase tracking-wider text-blue-500 dark:text-blue-400">
+                                🤖 AI Analysis Insight
+                              </span>
+                              <button
+                                onClick={() => setAiExplanation("")}
+                                className="text-xs opacity-50 hover:opacity-100 transition-opacity"
+                                title="Clear Explanation"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            <p className="italic">{aiExplanation}</p>
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {/* Manipulation Index */}
@@ -1165,10 +1248,6 @@ const analyzeEmojiSentiment = (text) => {
                     )}
                   </div>
                 )}
-                
-                <div className="App">
-                  <OnboardingTour />
-                </div>
 
                 <div className="mt-6 p-4 rounded-xl border text-left">
                   <div className="flex items-center justify-between mb-2">

@@ -119,6 +119,29 @@ const checkConnectionStatus = async () => {
     }
   };
 
+ const handleFeedback = async (email, correctLabel) => {
+  try {
+    const token = localStorage.getItem('token');
+    await axios.post('/api/feedback', {
+      text: email.body,
+      predicted_label: email.prediction,
+      correct_label: correctLabel,
+      sender: email.sender,
+      confidence: email.confidence
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    
+    setEmails(prev => prev.map(e => 
+      e.id === email.id ? { ...e, feedbackGiven: true } : e
+    ));
+    
+    toast.success('Thank you for your feedback!');
+  } catch (error) {
+    toast.error('Failed to save feedback');
+  }
+};
+
   const handleScan = async (provider) => {
     if (!provider) return;
     setScanning(true);
@@ -362,6 +385,22 @@ const checkConnectionStatus = async () => {
             )}
           </div>
         </div>
+        <div className="email-actions">
+          {!email.feedbackGiven && (
+          <>
+          <button onClick={() => handleFeedback(email, 'ham')}>
+          ✅ Mark as Safe
+          </button>
+          <button onClick={() => handleFeedback(email, 'spam')}>
+        🚫 Mark as Spam
+        </button>
+        </>
+       )}
+    {email.feedbackGiven && (
+    <span className="feedback-thanks">✅ Thanks for your feedback!</span>
+    )}
+    </div>
+
         {/* IMAP Card */}
         <div className={`p-5 rounded-2xl border transition-all duration-300 ${
           isDark ? "bg-slate-900/40 border-slate-800" : "bg-white/45 border-slate-200"

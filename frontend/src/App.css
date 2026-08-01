@@ -149,3 +149,19 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+/* frontend/src/App.css or index.css */
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse {
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
+
+/* Progress bar transition */
+.progress-bar {
+  transition: width 0.5s ease-out, background-color 0.3s ease;
+}

@@ -1,8 +1,13 @@
 // backend/routes/emailIntegrationRoutes.js
 const express = require('express');
 const router = express.Router();
+const attachmentScanner = require('../services/attachmentScanner');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 const { protect } = require('../middleware/authMiddleware');
 const headerAnalyzer = require('../services/headerAnalyzer');
+const emailAuthValidator = require('../services/emailAuthValidator');
+
 
 const {
   gmailAuthUrl,
@@ -15,6 +20,21 @@ const {
   outlookEmails,
   scanEmails
 } = require('../controllers/emailController');
+
+router.post('/validate-email-auth', protect, async (req, res) => {
+  try {
+    const { domain } = req.body;
+    
+    if (!domain) {
+      return res.status(400).json({ error: 'Domain is required' });
+    }
+    
+    const result = await emailAuthValidator.validateDomain(domain);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to validate email authentication' });
+  }
+});
 
 router.post('/analyze-headers', protect, async (req, res) => {
   try {
@@ -32,6 +52,25 @@ router.post('/analyze-headers', protect, async (req, res) => {
     res.status(500).json({ error: 'Failed to analyze headers' });
   }
 });
+
+router.post('/scan-attachment', protect, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const result = attachmentScanner.scanAttachment(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype
+    );
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to scan attachment' });
+  }
+});
+
 // ==================== GMAIL ROUTES ====================
 router.get("/gmail/auth-url", protect, gmailAuthUrl);
 router.get("/gmail/callback", gmailCallback);

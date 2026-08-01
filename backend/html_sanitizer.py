@@ -75,8 +75,12 @@ _METADATA_HOSTS = frozenset(
     }
 )
 
-# CSS constructs that fetch resources.
-_CSS_URL_RE = re.compile(r"url\s*\(\s*['\"]?[^)]*['\"]?\s*\)", re.IGNORECASE)
+# CSS constructs that fetch resources. The url() body is a single negated class
+# (everything up to the closing paren); the optional quote flanks in the earlier
+# form were subsumed by `[^)]*` and only added ambiguous backtracking, so they
+# are dropped. Matching is unchanged: both forms consume `url(` through the first
+# `)`.
+_CSS_URL_RE = re.compile(r"url\s*\([^)]*\)", re.IGNORECASE)
 _CSS_IMPORT_RE = re.compile(r"@import[^;]+;?", re.IGNORECASE)
 
 
