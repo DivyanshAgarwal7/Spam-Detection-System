@@ -187,7 +187,11 @@ def _predict_batch(messages, snapshot):
     Raises on any transform/predict failure; callers isolate failures by
     retrying the offending batch one row at a time.
     """
-    text_vectors = snapshot.vectorizer.transform(messages)
+    # Scored on the prepared form for parity with training and /predict; the
+    # rows echoed back below stay verbatim so a result still matches its input.
+    text_vectors = snapshot.vectorizer.transform(
+        [prepare_text(msg) for msg in messages]
+    )
     predictions = snapshot.model.predict(text_vectors)
     final_outputs = snapshot.label_encoder.inverse_transform(predictions)
     decisions = snapshot.model.decision_function(text_vectors)
