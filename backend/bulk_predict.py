@@ -114,6 +114,9 @@ def _extract_rows(file):
         return None, "Empty file uploaded."
 
     try:
+        content_bytes = file.read()
+        content_str = content_bytes.decode("utf-8", errors="replace")
+        text_wrapper = io.StringIO(content_str)
         text_wrapper = io.TextIOWrapper(file.stream, encoding="utf-8", errors="replace")
     except Exception:
         return None, "Failed to read uploaded file."

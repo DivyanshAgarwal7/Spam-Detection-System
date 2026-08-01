@@ -5,7 +5,7 @@ import logging
 import numpy as np
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from backend.xai_service import XAIService
 from backend.config import FRONTEND_URL, BASE_URL, PORT
@@ -114,7 +114,7 @@ async def log_requests_middleware(request: Request, call_next):
 
 # ── Request schema ────────────────────────────────────────────────────────────
 class PredictIn(BaseModel):
-    text: str
+    text: str = Field(..., max_length=5000, description="Input query string")
     type: str
 
 # ── Prediction route ──────────────────────────────────────────────────────────
