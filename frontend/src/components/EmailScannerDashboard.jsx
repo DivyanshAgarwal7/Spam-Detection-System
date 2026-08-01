@@ -41,6 +41,7 @@ export default function EmailScannerDashboard() {
     checkConnectionStatus();
     handleOAuthCallback();
     refreshImapStatus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 const checkConnectionStatus = async () => {

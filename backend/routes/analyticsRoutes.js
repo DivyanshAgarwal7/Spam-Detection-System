@@ -6,7 +6,6 @@ const { checkModelDrift } = require('../controllers/mlopsController');
 
 const {
   getSummary,
-  getTrends,
   getBreakdown,
   getPersonalSummary,
 } = require("../controllers/analyticsController");
@@ -21,6 +20,13 @@ router.get("/breakdown", getBreakdown);
 router.get('/model-drift', checkModelDrift); 
 router.get("/me", getPersonalSummary);
 
+router.get("/breakdown", getBreakdown);
+router.get('/model-drift', checkModelDrift); 
+router.get("/me", getPersonalSummary);
+
+router.get('/accuracy', protect, async (req, res) => {
+  try {
+    const feedbacks = await History.find({ user: req.user.id, "feedback.label": { $exists: true } });
 router.get('/analytics', protect, async (req, res) => {
   try {
     const feedbacks = await History.find({ user: req.user.id, "feedback.label": { $exists: true } });
