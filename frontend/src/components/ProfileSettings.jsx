@@ -16,7 +16,7 @@ export function ProfileSettings() {
         headers: { Authorization: `Bearer ${token}` }
       });
       alert('Profile updated!');
-    } catch (err) {
+    } catch {
       alert('Failed to update profile');
     } finally {
       setLoading(false);

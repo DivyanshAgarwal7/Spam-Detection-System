@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 export function Appearancesetting() {
     const [theme,setTheme] = useState(localStorage.getItem('theme') || 'light');

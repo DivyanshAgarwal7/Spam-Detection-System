@@ -177,6 +177,7 @@ const monitorConnectionPool = () => {
         }
       }
     } catch (err) {
+      // Ignore error when client topology or pool is not fully initialized
     }
   }, 60000); // every 60 seconds
 

@@ -75,7 +75,7 @@ const worker = new Worker('PredictionQueue', async job => {
             dbJob.error = errorMsg;
             await dbJob.save();
         }
-        throw new Error(errorMsg);
+        throw new Error(errorMsg, { cause: error });
     } finally {
         // Cleanup temporary file
         if (filePath && fs.existsSync(filePath)) {
