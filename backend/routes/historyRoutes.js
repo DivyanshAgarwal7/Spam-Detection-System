@@ -10,6 +10,7 @@ const {
   getHistoryCount,
 } = require("../controllers/historyController");
 
+const History = require("../models/History");
 const { protect } = require("../middleware/authMiddleware");
 
 router.use(protect);
@@ -30,14 +31,13 @@ router.delete("/:id", deleteHistoryItem);
 router.delete("/", clearHistory);
 
 router.get('/count', getHistoryCount);
-module.exports = router;
 
-router.get('/recent',protect, async(req,res)=> {
-  try{
-    const predictions= await Prediction.find({userId: req.user.id })
+router.get('/recent', protect, async (req, res) => {
+  try {
+    const predictions = await History.find({ user: req.user.id })
       .sort({ createdAt: -1 })
       .limit(10)
-      .select('text result createdAt');
+      .select('query prediction createdAt');
 
       res.json(predictions);
   }catch(error){
@@ -84,6 +84,8 @@ router.get('/',protect,async(req,res) => {
     
     res.json(predictions);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch history' });
+    res.status(500).json({ error: 'Failed to fetch recent activity' });
   }
 });
+
+module.exports = router;

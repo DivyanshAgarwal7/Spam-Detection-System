@@ -1,7 +1,5 @@
 // backend/controllers/emailController.js
 const axios = require('axios');
-const { protect } = require('../middleware/authMiddleware');
-const User = require('../models/User');
 const { applyRulesToEmails } = require('../utils/emailRules');
 const validationMessages = require('../utils/validationMessages');
 

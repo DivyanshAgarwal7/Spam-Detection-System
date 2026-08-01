@@ -24,10 +24,26 @@ const helmet = require('helmet');
 const axios = require("axios");
 const { corsOptions } = require('./config/corsConfig');
 
+// ===== STARTUP TIMER =====
+const SERVER_START_TIME = Date.now();
+const startupLogs = [];
+const logStartupTime = (component, startTime) => {
+  const elapsed = Date.now() - startTime;
+  startupLogs.push({ component, elapsed });
+  logger.info(`⏱️ ${component} loaded in ${elapsed}ms`);
+};
+
 // Initialize background jobs
 require('./jobs/archivalCron');
 require('./jobs/webhookRetryCron');
 const { preventCacheStampede } = require('./middleware/cacheMiddleware');
+
+// Load Route Modules
+const adversarialRoutes = require('./routes/adversarialRoutes');
+const evoMailRoutes = require('./routes/evoMailRoutes');
+const poisoningRoutes = require('./routes/poisoningRoutes');
+const visualRoutes = require('./routes/visualRoutes');
+const saltingRoutes = require('./routes/saltingRoutes');
 const adversarialRoutes = require('./routes/adversarialRoutes');
 const evoMailRoutes = require('./routes/evoMailRoutes');
 const poisoningRoutes = require('./routes/poisoningRoutes');
@@ -42,9 +58,6 @@ const federationRoutes = require('./routes/federationRoutes');
 const utilityRoutes = require("./routes/utilityRoutes");
 const bulkPredictRoutes = require("./routes/bulkPredict");
 
-// ===== STARTUP TIMER =====
-const SERVER_START_TIME = Date.now();
-const startupLogs = [];
 const { configureAxios } = require('./config/axios');
 configureAxios(); // Apply the global axios configuration
 const logStartupTime = (component, startTime) => {
@@ -54,7 +67,6 @@ const logStartupTime = (component, startTime) => {
 };
 
 const mongoose = require("mongoose");
-
 const History = require("./models/History");
 const Rule = require("./models/Rule");
 const User = require("./models/User");
@@ -64,8 +76,15 @@ const displayBanner = require('./utils/banner');
 const { upload } = require('./config/multerConfig');
 const FormData = require("form-data");
 
+// Initialize Express App
 const app = express();
 
+// Mount Custom Routes
+app.use('/api/adversarial', adversarialRoutes);
+app.use('/api/evomail', evoMailRoutes);
+app.use('/api/poisoning', poisoningRoutes);
+app.use('/api/visual', visualRoutes);
+app.use('/api/salting', saltingRoutes);
 
 
 // Apply standard throttling to the heavy ML prediction route
@@ -158,6 +177,7 @@ const monitorConnectionPool = () => {
         }
       }
     } catch (err) {
+      // Ignore error when client topology or pool is not fully initialized
     }
   }, 60000); // every 60 seconds
 

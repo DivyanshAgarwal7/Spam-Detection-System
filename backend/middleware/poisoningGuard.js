@@ -16,6 +16,7 @@ const SUSPICIOUS_PATTERNS = {
     allCaps: /[A-Z]{5,}/g,
     specialChars: /[^a-zA-Z0-9\s!?.,]/g,
     urlObfuscation: /https?:\/\/[^\s]+\?[^\s]+/g,
+    // eslint-disable-next-line no-control-regex
     homoglyph: /[^\x00-\x7F]/g,
     weirdSpacing: /\s{3,}/g
 };

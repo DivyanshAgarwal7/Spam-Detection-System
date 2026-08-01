@@ -1,5 +1,4 @@
 const axios = require('axios');
-const { adversarialGuard, monitorConfidence } = require('../middleware/adversarialGuard');
 
 /**
  * Make prediction with adversarial defense

@@ -683,4 +683,32 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="VBSF Visual Detector CLI")
+    parser.add_argument("--command", type=str, required=False, help="Command to run")
+    parser.add_argument("--params", type=str, required=False, help="JSON params for command")
+    
+    args = parser.parse_args()
+    
+    if args.command:
+        try:
+            params = json.loads(args.params) if args.params else {}
+        except Exception as e:
+            print(json.dumps({"success": False, "error": f"Invalid params JSON: {str(e)}"}))
+            sys.exit(1)
+            
+        ensemble = StackingEnsemble()
+        
+        if args.command == "detect":
+            html = params.get("html", "")
+            result = ensemble.detect(html)
+            print(json.dumps(result))
+        elif args.command == "status":
+            print(json.dumps({"status": "active", "version": "1.0.0", "trained": ensemble.is_trained}))
+        else:
+            print(json.dumps({"success": False, "error": f"Unknown command: {args.command}"}))
+            sys.exit(1)
+    else:
+        main()

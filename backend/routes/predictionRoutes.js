@@ -414,8 +414,9 @@ router.post('/predict', protect, async (req, res) => {
 });
 
 router.post("/feedback", protect, async (req, res) => {
- try {
-    const { text, predicted_label, correct_label, historyId, note } = req.body;
+  let text, predicted_label, correct_label, historyId, note;
+  try {
+    ({ text, predicted_label, correct_label, historyId, note } = req.body);
 
     if (!text || !correct_label) {
       return res
@@ -835,7 +836,7 @@ router.get('/stats', protect, async (req, res) => {
     today.setHours(0, 0, 0, 0);
 
     // Get all predictions for user
-    const predictions = await Prediction.find({ userId });
+    const predictions = await History.find({ user: userId });
     
     // Calculate stats
     const total = predictions.length;
