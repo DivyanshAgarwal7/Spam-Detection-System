@@ -86,7 +86,9 @@ class TestFeedback:
             "correct_label": "offensive",
         })
         assert res.status_code == 400
-        assert res.get_json() == {"error": "Invalid feedback data"}
+        body = res.get_json()
+        assert body["error"] == "Invalid feedback data"
+        assert body["error_detail"]["code"] == "INVALID_FEEDBACK"
         assert not feedback_file.exists()
 
     def test_missing_text_rejected(self, client):
@@ -96,7 +98,9 @@ class TestFeedback:
             "correct_label": "spam",
         })
         assert res.status_code == 400
-        assert res.get_json() == {"error": "Invalid feedback data"}
+        body = res.get_json()
+        assert body["error"] == "Invalid feedback data"
+        assert body["error_detail"]["code"] == "INVALID_FEEDBACK"
         assert not feedback_file.exists()
 
     def test_missing_correct_label_rejected(self, client):
@@ -106,7 +110,9 @@ class TestFeedback:
             "predicted_label": "ham",
         })
         assert res.status_code == 400
-        assert res.get_json() == {"error": "Invalid feedback data"}
+        body = res.get_json()
+        assert body["error"] == "Invalid feedback data"
+        assert body["error_detail"]["code"] == "INVALID_FEEDBACK"
         assert not feedback_file.exists()
 
 

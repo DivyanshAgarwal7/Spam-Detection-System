@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { EmailAuthValidator } from '../components/EmailAuthValidator';
 import {
   ResponsiveContainer,
   LineChart,
@@ -272,6 +273,10 @@ export default function Dashboard() {
               </LineChart>
             </ResponsiveContainer>
           )}
+        </div>
+
+        <div className="dashboard-grid">
+          <EmailAuthValidator />
         </div>
 
         {/* Breakdown chart */}

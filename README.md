@@ -39,6 +39,96 @@ Reactjs: (http://localhost:5173)
 
 
 ---
+## 📄 API Reference
+
+The Flask ML API publishes a machine-readable OpenAPI 3.0 contract, so
+integrators (the Node gateway, browser extension, mobile app) can generate
+typed SDKs or validate requests instead of reading `api.py` by hand.
+
+* **OpenAPI spec:** [`GET /openapi.json`](http://127.0.0.1:5000/openapi.json) —
+  the full OpenAPI 3.0 document (info, servers, the `X-Internal-Secret`
+  security scheme, and every route's request/response schema).
+* **Swagger UI:** [`GET /docs`](http://127.0.0.1:5000/docs) — interactive,
+  human-browsable docs rendered from `/openapi.json`.
+
+Both endpoints are public (no `X-Internal-Secret` required). A coverage test
+(`backend/tests/test_openapi_coverage.py`) asserts every registered route is
+documented, so the spec never drifts from the code.
+
+### `/predict` response cache
+
+`POST /predict` is fronted by an in-process, content-addressed response cache
+(`backend/predict_cache.py`). The cache key is `sha256` of the *normalised*
+input text (via `utils/text_normalizer`) combined with the prediction options
+and the live model version, so:
+
+* repeated identical requests skip the full inference pipeline and return the
+  cached body, and
+* a `POST /reload-model` hot-swap bumps the serving version and transparently
+  invalidates every prior entry — a stale model can never serve a cached answer.
+
+Each response carries an `X-Cache: HIT|MISS` header. Send `Cache-Control:
+no-cache` or `?fresh=1` to bypass the lookup and force a fresh computation.
+Aggregate counters (hits, misses, size, evictions, hit rate — never any cached
+content) are exposed at the public `GET /cache-stats`. The cache is bounded by
+TTL and LRU eviction and configured via `PREDICT_CACHE_ENABLED`,
+`PREDICT_CACHE_MAX_SIZE` and `PREDICT_CACHE_TTL_SECONDS`.
+
+---
+## 🧾 Model Registry & Provenance
+
+The Flask ML API records **which** model bytes it is serving, so a deployed or
+hot-reloaded model can be identified and a prediction can be traced back to the
+exact artifacts that produced it (issue #1007). Fingerprints are computed by
+`backend/model_registry.py` (`build_metadata`) over the classifier `model`,
+`vectorizer` and `label_encoder`: each artifact's SHA-256, size and mtime, plus
+the optional human-authored fields (`trained_at`, `metrics`, `labels`) read from
+a `model_card.json` sitting next to the model when present.
+
+### `GET /model-info`
+
+Public (no `X-Internal-Secret` required). Reports the live model set — its
+`version` (mirrors `/model-status` and increments on every `/reload-model`), the
+per-artifact `checksums`, and the full `metadata`:
+
+```json
+{
+  "version": 3,
+  "checksums": {
+    "model": "9f2b…",
+    "vectorizer": "1c7a…",
+    "label_encoder": "e004…"
+  },
+  "metadata": {
+    "model": {"path": "…/linear_svm_model.pkl", "sha256": "9f2b…", "size_bytes": 24576, "mtime": 1753000000.0},
+    "vectorizer": {"path": "…/tfidf_vectorizer.pkl", "sha256": "1c7a…", "size_bytes": 81920, "mtime": 1753000000.0},
+    "label_encoder": {"path": "…/label_encoder.pkl", "sha256": "e004…", "size_bytes": 512, "mtime": 1753000000.0},
+    "short_checksum": "9f2b1a0c4d5e",
+    "trained_at": "2026-07-20T12:00:00Z",
+    "metrics": {"accuracy": 0.98},
+    "labels": ["ham", "spam", "smishing"]
+  }
+}
+```
+
+`metadata` is `null` when no provenance is available (e.g. a test harness that
+installs bare fakes). Dropping a `model_card.json` next to the model artifact is
+the only step needed to populate `trained_at` / `metrics` / `labels`.
+
+### Prediction & reload provenance
+
+`/predict` and `/importance` responses carry an additive `model_version` (and a
+short `model_checksum` when provenance is available) identifying the model set
+that served the request — existing fields are unchanged, so this is backward
+compatible. On every `/reload-model`, a structured audit line is logged:
+
+```
+model reloaded v2 -> v3 (checksum 1c7a… -> 9f2b…)
+```
+
+so a version bump and the model bytes going in and out are visible in the logs.
+
+---
 ## System Stability & Environment Fixes
 This update addresses critical runtime issues that prevented the system from executing in the local development environment:
 
@@ -150,14 +240,33 @@ cd backend
 python api.py
 ```
 
-The Flask ML API binds to `127.0.0.1` (localhost only) with the debugger
-disabled by default. These are controlled via environment variables:
+#### Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `FLASK_PORT` | `5000` | Port the API listens on. |
-| `FLASK_HOST` | `127.0.0.1` | Interface to bind. Use `0.0.0.0` to expose on all interfaces **only behind a trusted proxy**. |
-| `FLASK_DEBUG` | `false` | Enables the Werkzeug debugger. Keep off outside local development — it allows remote code execution. |
+The Flask ML API validates its entire configuration once at startup
+(`backend/settings.py`). If anything is misconfigured it **fails fast at boot**
+and reports **every** problem at once in a single error, rather than surfacing
+them one restart at a time. The validated variables:
+
+| Variable | Default | Validation | Purpose |
+| --- | --- | --- | --- |
+| `INTERNAL_SECRET` | — (required) | Present and ≥ 32 characters | Shared secret authenticating requests from the Node/Express backend. No fallback. |
+| `FLASK_HOST` | `127.0.0.1` | — | Interface to bind. Use `0.0.0.0` to expose on all interfaces **only behind a trusted proxy**. |
+| `FLASK_PORT` | `5000` | Integer in `1`–`65535` | Port the API listens on. |
+| `FLASK_DEBUG` | `false` | Refused when `true` on a non-loopback `FLASK_HOST` | Enables the Werkzeug debugger. Keep off outside local development — it allows remote code execution. |
+| `MAX_MESSAGE_LENGTH` | `10000` | Non-negative integer | Maximum accepted `/predict` message length (characters). |
+| `SERVICE_IP_ALLOWLIST` | `127.0.0.1,::1` | — | Comma-separated IPs allowed to reach protected routes (skipped when `NODE_ENV=development`). |
+| `NODE_ENV` | unset | — | `development` relaxes IP allowlisting for local work. |
+| `MODEL_PATH` | `linear_svm_model.pkl` | File must exist and be non-empty | Spam classifier model. |
+| `VECTORIZER_PATH` | `tfidf_vectorizer.pkl` | File must exist and be non-empty | TF-IDF vectorizer for the classifier. |
+| `LABEL_ENCODER_PATH` | `label_encoder.pkl` | File must exist and be non-empty | Label encoder for the classifier. |
+| `URL_MODEL_PATH` | `url_detector.pkl` | File must exist and be non-empty | URL maliciousness model. |
+| `URL_VECTORIZER_PATH` | `url_vectorizer.pkl` | File must exist and be non-empty | Vectorizer for the URL model. |
+
+Relative model paths are resolved against `backend/`. Optional integrations
+(`REDIS_URL` / `RATE_LIMIT_STORAGE_URI` for rate-limit storage,
+`SAFE_BROWSING_API_KEY` / `VIRUSTOTAL_API_KEY` for threat intel) are also exposed
+on the settings object; they are unvalidated because each degrades gracefully
+when unset.
 
 > ⚠️ Never run with `FLASK_DEBUG=true` while bound to a non-loopback host. The
 > app refuses to start for that combination to prevent exposing the interactive
@@ -358,6 +467,186 @@ RATE_LIMIT_MAX=100
 When the limit is exceeded the API returns:
 
 `HTTP 429 Too Many Requests`
+
+### Flask ML API: per-endpoint limits
+
+The Python ML API applies dedicated limits to its expensive endpoints on top of a
+shared default. Counters are stored in-memory by default; set `REDIS_URL` (or
+`RATE_LIMIT_STORAGE_URI`) to enforce limits across multiple workers/instances,
+with automatic in-memory fallback if Redis is unreachable.
+
+| Endpoint(s) | Policy | Default | Override |
+| --- | --- | --- | --- |
+| `/predict` | prediction | 50/min | `PREDICT_RATE_LIMIT` |
+| `/bulk-predict`, `/bulk-predict/export` | batch inference | 10/min | `BULK_PREDICT_RATE_LIMIT` |
+| `/scan-emails` | threat intel | 20/min | `THREAT_INTEL_RATE_LIMIT` |
+| `/gmail/emails`, `/outlook/emails` | inbox fetch | 15/min | `EMAIL_FETCH_RATE_LIMIT` |
+| everything else | default | 50/min | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` |
+
+Each limit accepts either the native `"<n> per <window>"` form or the Node-style
+`*_MAX` + `*_WINDOW_MS` pair. Exceeding a limit returns a JSON `429` with a
+`Retry-After` header, and each rejection is logged with the client, endpoint, and
+limit for operational visibility.
+
+## Error format
+
+Every error response from the Flask ML API uses one machine-readable envelope
+(issue #986). It is **backward compatible**: the legacy top-level `error` string
+is always present, and a structured `error_detail` block is added alongside it.
+
+```json
+{
+  "error": "No text provided",
+  "error_detail": {
+    "code": "NO_TEXT_PROVIDED",
+    "message": "No text provided",
+    "request_id": "req-abc123"
+  }
+}
+```
+
+* `error` — human-readable message; unchanged for existing clients.
+* `error_detail.code` — stable `ErrorCode` value (e.g. `NO_TEXT_PROVIDED`,
+  `INVALID_JSON_BODY`, `TEXT_TOO_LONG`, `INVALID_FEEDBACK`, `FORBIDDEN`,
+  `NOT_FOUND`, `RATE_LIMITED`, `PROVIDER_NOT_CONNECTED`, `UPSTREAM_FETCH_FAILED`,
+  `INTERNAL_ERROR`). Branch on this rather than parsing the message.
+* `error_detail.message` — same text as `error`.
+* `error_detail.request_id` — echoes `X-Request-ID` (`g.request_id`) so a failure
+  can be correlated with server logs.
+
+Success responses are unchanged. A few error responses carry extra top-level
+fields for backward compatibility: the zero-trust `403` and the word-cloud
+endpoints keep `success: false`, and the `429` keeps its `success` / `error` /
+`message` fields — all with `error_detail` added. Success responses are never
+modified. Codes are defined in `backend/errors.py`.
+
+---
+
+## 🪵 Logging
+
+The Flask ML API emits **structured JSON logs** (issue #1006). Logging is
+configured once at startup by `configure_logging()` in
+`backend/logging_config.py`, which installs a JSON formatter on the root logger
+so every line — including records from `app.logger` — is a single
+self-describing object rather than free-form text.
+
+Each line carries a fixed core schema plus any structured fields passed at the
+call site:
+
+```json
+{
+  "ts": "2026-07-29T09:41:03.512+00:00",
+  "level": "INFO",
+  "logger": "ml_api.access",
+  "msg": "request",
+  "request_id": "8f2c1e5b7a9d4c3e",
+  "method": "POST",
+  "path": "/predict",
+  "status": 200,
+  "latency_ms": 42.7,
+  "response_size": 1834
+}
+```
+
+* `request_id` — correlation id for the request. It is taken from the
+  `X-Request-ID` header when present; otherwise a fresh `uuid4` hex is minted in
+  `capture_request_id()` so every request is traceable (no more static
+  `unknown-ml-req`). A `RequestIdFilter` injects it onto every record and is
+  safe outside a request context (falls back to `-`).
+* **Access log** — one line per request (`logger` = `ml_api.access`, `msg` =
+  `request`) with `method`, `path`, `status`, `latency_ms`, `request_id`, and
+  `response_size`. Latency is measured from a start time stamped in the first
+  `before_request` hook, so it covers requests short-circuited (e.g. a `403`)
+  before later hooks run.
+* Use `get_logger(name)` to obtain a module logger; records flow through the
+  configured root. `configure_logging()` is idempotent, so a reimport or a test
+  that loads the app twice never double-emits.
+
+### Redaction
+
+Before a record is formatted it passes through a `RedactionFilter` that scrubs
+sensitive material to `***`, so a token or address accidentally handed to a log
+call never reaches the sink in the clear. It covers:
+
+* the `X-Internal-Secret` value,
+* OAuth **access / refresh tokens** and HTTP `Bearer` tokens,
+* threat-intel **API keys** (`SAFE_BROWSING_API_KEY`, `VIRUSTOTAL_API_KEY`),
+* **email addresses** and message bodies.
+
+Both the rendered message and string-valued structured fields are cleaned.
+Exact secret values present in the environment at startup are additionally
+scrubbed literally, catching a bare value logged without a recognisable key.
+
+Contract coverage lives in `backend/tests/test_logging.py`: every emitted record
+is valid JSON with a `request_id`, the id propagates from the header, and a
+known secret / token / email never survives to the output.
+
+---
+
+## 📊 Metrics & Monitoring
+
+The Flask ML API exposes a Prometheus-compatible `GET /metrics` endpoint (powered
+by `prometheus-client`). It is public — a scraper reaches it without the internal
+secret because it emits only aggregate counters, never message content — and
+returns the standard `text/plain; version=0.0.4` exposition format.
+
+Metrics collected (labels in parentheses):
+
+| Metric | Type | Labels |
+| --- | --- | --- |
+| `spam_predictions_total` | Counter | `result`, `input_type` |
+| `spam_request_latency_seconds` | Histogram | `endpoint`, `method` |
+| `spam_requests_total` | Counter | `endpoint`, `method`, `status` |
+| `spam_errors_total` | Counter | `endpoint` |
+| `spam_rate_limit_rejections_total` | Counter | `policy` |
+| `spam_model_loaded` | Gauge | — |
+
+Request counts, latency, errors, and rate-limit rejections are recorded from the
+existing request lifecycle; `spam_model_loaded` is set to `1` once the models load
+at startup.
+
+Sample Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: spam-ml-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:5000"]
+```
+
+---
+
+## 🩺 Health Probes & Graceful Shutdown
+
+The Flask ML API exposes split liveness/readiness probes so an orchestrator can
+tell "restart this pod" apart from "stop routing traffic here" (issue #1009).
+All three probes are public (no `X-Internal-Secret` required).
+
+| Endpoint | Meaning | Codes |
+| --- | --- | --- |
+| `GET /health/live` | Process is up and can answer. Never depends on downstream state. | `200` always |
+| `GET /health/ready` | Safe to route traffic: serving state is loaded and the spam-words DB and rate-limit store both respond. | `200` ready, `503` otherwise |
+| `GET /health` | Backward-compatible alias of the original static probe. | `200` `{"status":"ok"}` |
+
+A ready response reports each dependency:
+
+```json
+{
+  "status": "ready",
+  "checks": { "serving_state": true, "spam_words_db": true, "rate_limit_store": true }
+}
+```
+
+When any dependency is down, `/health/ready` returns a `503` in the standard
+error envelope (`error_detail.code = "NOT_READY"`) with the per-check map so the
+failing dependency is obvious.
+
+**Graceful shutdown.** On `SIGTERM` the API enters *draining* mode:
+`/health/ready` immediately starts returning `503` (so load balancers drain the
+instance), then the process waits for in-flight requests to finish before
+exiting, bounded by `DRAIN_TIMEOUT_SECONDS` (default `25`). Liveness stays `200`
+throughout so the pod is not force-restarted mid-drain.
 
 ---
 

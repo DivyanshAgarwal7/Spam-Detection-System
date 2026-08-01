@@ -5,7 +5,9 @@ Detects adversarial attacks at word, character, sentence, and paragraph levels
 """
 
 import re
+import sys
 import json
+import argparse
 import numpy as np
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -438,16 +440,16 @@ class MultiLevelAdversarialDefense:
         """Save meta-classifier"""
         if self.meta_classifier:
             joblib.dump(self.meta_classifier, MODEL_DIR / 'meta_classifier.pkl')
-            print(f"💾 Saved meta-classifier to {MODEL_DIR / 'meta_classifier.pkl'}")
+            print(f"💾 Saved meta-classifier to {MODEL_DIR / 'meta_classifier.pkl'}", file=sys.stderr)
     
     def load(self):
         """Load meta-classifier"""
         try:
             if (MODEL_DIR / 'meta_classifier.pkl').exists():
                 self.meta_classifier = joblib.load(MODEL_DIR / 'meta_classifier.pkl')
-                print("✅ Meta-classifier loaded")
+                print("✅ Meta-classifier loaded", file=sys.stderr)
         except Exception as e:
-            print(f"⚠️ Failed to load meta-classifier: {e}")
+            print(f"⚠️ Failed to load meta-classifier: {e}", file=sys.stderr)
 
 
 # ============================================
@@ -488,5 +490,140 @@ def main():
     return defense
 
 
+
+
+# ============================================
+# CLI INTERFACE
+# ============================================
+# Bridges the Express `/adversarial/*` routes (routes/adversarialRoutes.js) to
+# this module. Those routes spawn:
+#     python multi_level_defense.py --command <detect|train|status> --params <JSON>
+# and expect a single JSON object on stdout plus exit code 0 on success (non-zero
+# with a message on stderr on failure).
+
+
+def _json_default(value):
+    """Fallback encoder for numpy scalar types the detectors may emit."""
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _emit(payload):
+    """Write a JSON object to stdout for the calling Express process."""
+    sys.stdout.write(json.dumps(payload, default=_json_default))
+    sys.stdout.flush()
+
+
+def _normalize_label(label):
+    """Map a training label onto the binary target (1 = adversarial)."""
+    if isinstance(label, bool):
+        return int(label)
+    if isinstance(label, (int, float)):
+        return 1 if label >= 1 else 0
+    if isinstance(label, str):
+        return 1 if label.strip().lower() in {"1", "adversarial", "spam", "attack", "true", "yes"} else 0
+    raise ValueError(f"Unsupported label value: {label!r}")
+
+
+def _command_detect(defense, params):
+    text = params.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Parameter 'text' is required and must be a non-empty string")
+    return defense.detect(text)
+
+
+def _command_train(defense, params):
+    samples = params.get("samples")
+    if not isinstance(samples, list) or len(samples) == 0:
+        raise ValueError("Parameter 'samples' is required and must be a non-empty array")
+
+    features = []
+    labels = []
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            raise ValueError(f"Sample at index {index} must be an object with 'text' and 'label'")
+        text = sample.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"Sample at index {index} is missing a non-empty 'text'")
+        if "label" not in sample:
+            raise ValueError(f"Sample at index {index} is missing 'label'")
+
+        level_results = {
+            level: detector.detect(text)
+            for level, detector in defense.detectors.items()
+        }
+        features.append(defense._extract_meta_features(level_results))
+        labels.append(_normalize_label(sample["label"]))
+
+    if len(set(labels)) < 2:
+        raise ValueError("Training requires samples from at least two distinct labels")
+
+    defense.train_meta_classifier(features, labels)
+    return {"trained": True, "samples": len(samples), "features_per_sample": len(features[0])}
+
+
+def _command_status(defense):
+    return {
+        "ready": True,
+        "meta_classifier_loaded": defense.meta_classifier is not None,
+        "threshold": defense.threshold,
+        "levels": list(defense.detectors.keys()),
+        "weights": defense.weights,
+        "model_dir": str(MODEL_DIR),
+    }
+
+
+def run_cli(argv=None):
+    parser = argparse.ArgumentParser(description="Multi-Level Adversarial Defense CLI")
+    parser.add_argument(
+        "--command",
+        choices=["detect", "train", "status"],
+        help="Operation to run. Omit to run the interactive demo.",
+    )
+    parser.add_argument(
+        "--params",
+        default="{}",
+        help="JSON-encoded parameters for the command.",
+    )
+    args = parser.parse_args(argv)
+
+    # No command -> preserve the original demo behaviour when run directly.
+    if args.command is None:
+        main()
+        return 0
+
+    try:
+        params = json.loads(args.params)
+    except json.JSONDecodeError as error:
+        _emit({"success": False, "error": f"Invalid --params JSON: {error}"})
+        return 1
+    if not isinstance(params, dict):
+        _emit({"success": False, "error": "--params must be a JSON object"})
+        return 1
+
+    try:
+        defense = MultiLevelAdversarialDefense()
+        if args.command == "detect":
+            result = _command_detect(defense, params)
+        elif args.command == "train":
+            result = _command_train(defense, params)
+        else:
+            result = _command_status(defense)
+    except Exception as error:  # surfaced to Express via stderr + non-zero exit
+        print(f"{args.command} failed: {error}", file=sys.stderr)
+        _emit({"success": False, "command": args.command, "error": str(error)})
+        return 1
+
+    _emit({"success": True, "command": args.command, **result})
+    return 0
+
+
 if __name__ == "__main__":
-    defense = main()
+    sys.exit(run_cli())
