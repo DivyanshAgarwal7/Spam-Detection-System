@@ -6,39 +6,12 @@ const ALLOWED_AVATAR_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 const storage = multer.memoryStorage();
 
-const fileFilter = async (req, file, cb) => {
-  try {
-    if (!file || !file.buffer) {
-      return cb(new Error('No file uploaded'), false);
-    }
-
-    const mimeType = file.mimetype;
-    if (!ALLOWED_AVATAR_MIME_TYPES.includes(mimeType)) {
-      return cb(new Error('Invalid file type. Only JPEG, PNG, and WEBP images are allowed.'), false);
-    }
-
-    const detectedType = await fileTypeFromBuffer(file.buffer);
-    
-    if (!detectedType) {
-      return cb(new Error('Unable to detect file type. Please upload a valid image.'), false);
-    }
-
-    if (!ALLOWED_AVATAR_MIME_TYPES.includes(detectedType.mime)) {
-      return cb(new Error(
-        `File content is "${detectedType.mime}", but expected an image (${ALLOWED_AVATAR_MIME_TYPES.join(', ')}).`
-      ), false);
-    }
-
-    if (detectedType.mime !== mimeType) {
-      return cb(new Error(
-        `MIME type mismatch: declared "${mimeType}" but detected "${detectedType.mime}"`
-      ), false);
-    }
-
-    cb(null, true);
-  } catch (error) {
-    cb(new Error(`File validation failed: ${error.message}`), false);
+const fileFilter = (req, file, cb) => {
+  const mimeType = file.mimetype;
+  if (!ALLOWED_AVATAR_MIME_TYPES.includes(mimeType)) {
+    return cb(new Error('Invalid file type. Only JPEG, PNG, and WEBP images are allowed.'), false);
   }
+  cb(null, true);
 };
 
 const upload = multer({
@@ -48,20 +21,39 @@ const upload = multer({
 });
 
 const handleAvatarUpload = (req, res, next) => {
-  upload.single('avatar')(req, res, (err) => {
-    if (!err) {
-      return next();
-    }
-    if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        const maxMb = MAX_AVATAR_BYTES / (1024 * 1024);
-        return res
-          .status(400)
-          .json({ error: `File too large. Maximum size is ${maxMb}MB.` });
+  upload.single('avatar')(req, res, async (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          const maxMb = MAX_AVATAR_BYTES / (1024 * 1024);
+          return res
+            .status(400)
+            .json({ error: `File too large. Maximum size is ${maxMb}MB.` });
+        }
+        return res.status(400).json({ error: err.message });
       }
-      return res.status(400).json({ error: err.message });
+      return res.status(400).json({ error: err.message || 'File upload failed.' });
     }
-    return res.status(400).json({ error: err.message || 'File upload failed.' });
+
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    try {
+      await validateFileContent(req.file.buffer);
+      
+      // Also perform declared vs detected type mismatch check
+      const detectedType = await fileTypeFromBuffer(req.file.buffer);
+      if (detectedType && detectedType.mime !== req.file.mimetype) {
+        return res.status(400).json({
+          error: `MIME type mismatch: declared "${req.file.mimetype}" but detected "${detectedType.mime}"`
+        });
+      }
+
+      next();
+    } catch (validationError) {
+      return res.status(400).json({ error: validationError.message });
+    }
   });
 };
 

@@ -15,6 +15,7 @@ const ActivityHeatmap = ({ userId, darkMode }) => {
 
   useEffect(() => {
     fetchActivityData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMonth, userId]);
 
   const fetchActivityData = async () => {

@@ -3,7 +3,7 @@ import api from "../utils/axiosInstance";
 import { useTheme } from "../context/ThemeContext";
 
 export default function AdminFeedbackView() {
-  const { isDark, activeTheme } = useTheme();
+  const { isDark } = useTheme();
   const [stats, setStats] = useState(null);
   const [feedbackList, setFeedbackList] = useState([]);
   const [loading, setLoading] = useState(true);
