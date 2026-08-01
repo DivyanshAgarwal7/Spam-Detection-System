@@ -15,6 +15,10 @@ const History = require("../models/History");
 
 router.use(protect);
 router.get("/summary", getSummary);
+router.get("/trends", getTrends);
+router.get("/breakdown", getBreakdown);
+router.get('/model-drift', checkModelDrift); 
+router.get("/me", getPersonalSummary);
 
 router.get('/trends', protect, async (req, res) => {
   try {
@@ -56,6 +60,7 @@ router.get('/accuracy', protect, async (req, res) => {
     const feedbacks = await History.find({ user: req.user.id, "feedback.label": { $exists: true } });
 router.get('/analytics', protect, async (req, res) => {
   try {
+    const feedbacks = await History.find({ user: req.user.id, "feedback.label": { $exists: true } });
     const { startDate, endDate } = req.query;
     
     const filter = { userId: req.user.id };
