@@ -8,8 +8,9 @@ that a reload actually changed anything.
 
 This module fingerprints those artifacts. :func:`build_metadata` reads each
 ``.pkl`` and captures its SHA-256, size and mtime, and -- when a
-``model_card.json`` sits next to the model -- folds in the human-authored
-provenance fields (``trained_at``, ``metrics``, ``labels``). The immutable
+``model_card.json`` sits next to the model -- folds in the provenance fields
+``retrain.py`` records there (``trained_at``, ``metrics``, ``labels`` and the
+``preparation_version`` the artifacts were trained under). The immutable
 :class:`ModelMetadata` it returns is stored alongside the serving objects in
 ``serving_state`` and surfaced at ``GET /model-info``; its
 :attr:`ModelMetadata.short_checksum` tags predictions and reload audit logs.
@@ -87,6 +88,19 @@ class ModelMetadata:
     trained_at: str | None = None
     metrics: dict | None = None
     labels: list | None = None
+    preparation_version: str | None = None
+
+    def preparation_matches(self, serving_version: str) -> bool:
+        """Whether these artifacts were trained under ``serving_version``.
+
+        An unrecorded version (``None``) counts as a match: artifacts predating
+        the model card carry no claim about their preparation, and refusing to
+        serve them would break existing deployments over missing metadata rather
+        than over a known conflict.
+        """
+        if self.preparation_version is None:
+            return True
+        return self.preparation_version == serving_version
 
     @property
     def short_checksum(self) -> str:
@@ -111,6 +125,7 @@ class ModelMetadata:
             "trained_at": self.trained_at,
             "metrics": self.metrics,
             "labels": self.labels,
+            "preparation_version": self.preparation_version,
         }
 
 
@@ -142,6 +157,7 @@ def build_metadata(
         trained_at=card.get("trained_at"),
         metrics=card.get("metrics"),
         labels=card.get("labels"),
+        preparation_version=card.get("preparation_version"),
     )
 
 

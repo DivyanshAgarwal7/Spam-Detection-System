@@ -1,36 +1,43 @@
-from flask import current_app
+from   email_header_analyzer    import analyze_headers
 import numpy as np
+from   pathlib                  import Path
+import serving_state
 import sys
-from pathlib import Path
-from email_header_analyzer import analyze_headers
-    
+from   text_preparation         import prepare_text
+
 try:
     # Import standard headers analyzer if available
-    
+
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 except ImportError:
     analyze_headers = None
 
+
 def scan_emails_with_model(emails):
     """Classifies a list of fetched emails using the active machine learning model.
-    
+
     Optionally appends header analysis results (risk_score, trust_level) if headers exist.
     """
-    vectorizer = getattr(current_app, "vectorizer", None)
-    model = getattr(current_app, "model", None)
-    label_encoder = getattr(current_app, "label_encoder", None)
-    
+    # Read through the shared serving state rather than objects pinned on the
+    # application at startup, so a /reload-model hot-swap reaches inbox scans too
+    # instead of leaving them on the model the process booted with.
+    snapshot = serving_state.STATE.snapshot() if serving_state.STATE else None
+    vectorizer = getattr(snapshot, "vectorizer", None)
+    model = getattr(snapshot, "model", None)
+    label_encoder = getattr(snapshot, "label_encoder", None)
+
     if not model or not vectorizer or not label_encoder:
-        raise ValueError("ML model dependencies are not loaded in the Flask application.")
-        
+        raise ValueError("ML model dependencies are not loaded in the serving state.")
+
     scanned_emails = []
     spam_count = 0
     safe_count = 0
-    
-    # Extract email subjects and bodies for batch vectorization
-    texts = [f"{e['subject']}. {e['body']}" for e in emails]
+
+    # Extract email subjects and bodies for batch vectorization, prepared with
+    # the shared contract so a scanned inbox agrees with /predict on the same
+    # message rather than scoring obfuscated text the model never saw.
+    texts = [prepare_text(f"{e['subject']}. {e['body']}") for e in emails]
     if texts:
-        
         text_vectors = vectorizer.transform(texts)
         predictions = model.predict(text_vectors)
         final_outputs = label_encoder.inverse_transform(predictions)
@@ -38,29 +45,28 @@ def scan_emails_with_model(emails):
     else:
         final_outputs = []
         decisions = []
-        
+
     for i, (e, pred) in enumerate(zip(emails, final_outputs)):
         pred_str = str(pred)
         # Classify as spam if not explicitly 'ham' or 'safe'
         is_spam = pred_str.lower() not in ("ham", "safe")
-        
+
         if is_spam:
             spam_count += 1
         else:
             safe_count += 1
-            
-        
+
         dec_score = float(np.max(np.abs(decisions[i])))
         prob = 1.0 / (1.0 + np.exp(-dec_score))
         conf_score = round(prob * 100, 2)
-        
+
         if conf_score >= 80:
             conf_level = "high"
         elif conf_score >= 60:
             conf_level = "medium"
         else:
             conf_level = "low"
-            
+
         email_result = {
             "id": e.get("id"),
             "subject": e.get("subject", "No Subject"),
@@ -71,7 +77,7 @@ def scan_emails_with_model(emails):
             "confidence": round(conf_score / 100.0, 4),
             "confidence_score": conf_score,
             "decision_score": dec_score,
-            "confidence_level": conf_level
+            "confidence_level": conf_level,
         }
         # Phishing integration preparation (optional header analysis)
         has_header_risk = False
@@ -83,7 +89,7 @@ def scan_emails_with_model(emails):
                 has_header_risk = True
             except Exception:
                 pass
-                
+
         # Fallback: check sender's domain metadata if header analysis wasn't performed/successful
         if not has_header_risk and e.get("sender"):
             try:
@@ -92,10 +98,11 @@ def scan_emails_with_model(emails):
                     sender_domain = sender_val.split("@")[-1].lower().strip(" >")
                     if sender_domain:
                         import domain_checker
+
                         domain_analysis = domain_checker.analyze_domain(sender_domain)
                         risk_val = domain_analysis.get("risk_score", 0)
                         email_result["risk_score"] = risk_val
-                        
+
                         if risk_val <= 20:
                             email_result["trust_level"] = "Trusted"
                         elif risk_val <= 60:
@@ -104,12 +111,12 @@ def scan_emails_with_model(emails):
                             email_result["trust_level"] = "High Risk"
             except Exception:
                 pass
-                
+
         scanned_emails.append(email_result)
-        
+
     return {
         "total_scanned": len(emails),
         "spam_count": spam_count,
         "safe_count": safe_count,
-        "emails": scanned_emails
+        "emails": scanned_emails,
     }

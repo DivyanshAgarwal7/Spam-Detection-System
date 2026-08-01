@@ -12,8 +12,8 @@ Behavior (per README spec):
     1. Loads the original training dataset (DATASET_PATH env var, default: dataset.csv)
     2. Loads feedback_store.csv (the corrected labels submitted via /feedback)
     3. Merges them into one training set (feedback's `correct_label` becomes the label)
-    4. Encodes labels once with a single LabelEncoder and normalizes text with the
-       same normalizer api.py uses at inference time.
+    4. Encodes labels once with a single LabelEncoder and prepares text with the
+       shared contract every inference path applies.
     5. Fits the vectorizer + LinearSVC ONCE on a held-out train split to report an
        honest accuracy, then refits ONCE on the full combined data for the artifacts
        actually written to disk.
@@ -21,7 +21,10 @@ Behavior (per README spec):
          - linear_svm_model.pkl
          - tfidf_vectorizer.pkl
          - label_encoder.pkl
-    7. Triggers a live model reload only AFTER a successful save.
+    7. Writes model_card.json alongside them, recording when the model was
+       trained, how it scored, its label set, and the text-preparation contract
+       it was trained under.
+    8. Triggers a live model reload only AFTER a successful save.
 
 Run this from the backend/ directory:
     cd backend
@@ -46,7 +49,7 @@ from   sklearn.model_selection  import train_test_split
 from   sklearn.preprocessing    import LabelEncoder
 from   sklearn.svm              import LinearSVC
 
-from   utils.text_normalizer    import normalizer
+from   text_preparation         import prepare_text
 
 VALID_LABELS = {"ham", "spam", "smishing"}
 
@@ -170,13 +173,13 @@ def train(
 ):
     """Deterministic training pipeline.
 
-    Text is normalized with the same normalizer api.py applies at inference, so
-    the vectorizer vocabulary matches what serving will see. Labels are encoded
-    ONCE and the encoded integers are used for every fit -- no raw string labels
-    leak into any model. The held-out fit and the production fit each happen
-    exactly once.
+    Text goes through the shared preparation contract that every inference path
+    also applies, so the vectorizer vocabulary matches what serving will see.
+    Labels are encoded ONCE and the encoded integers are used for every fit -- no
+    raw string labels leak into any model. The held-out fit and the production
+    fit each happen exactly once.
     """
-    normalized = combined["text"].apply(normalizer.normalize)
+    normalized = combined["text"].apply(prepare_text)
 
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(combined["label"])
@@ -225,6 +228,36 @@ def save_artifacts(
     print(f"Saved: {model_path}")
     print(f"Saved: {vectorizer_path}")
     print(f"Saved: {label_encoder_path}")
+
+
+def write_model_card(
+    result,
+    *,
+    model_path=MODEL_PATH,
+    card_path=None,
+):
+    """Emit the provenance sidecar the registry reads for ``GET /model-info``.
+
+    Records the preparation contract the artifacts were trained under so a later
+    mismatch between trained and serving text handling is detectable instead of
+    silently degrading predictions. Written after the artifacts, so a card can
+    never describe a model that failed to persist.
+    """
+    path = card_path or os.path.join(
+        os.path.dirname(os.path.abspath(model_path)), MODEL_CARD_FILENAME
+    )
+    card = {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "metrics": {
+            "holdout_accuracy": round(float(result.holdout.accuracy), 4),
+            "training_rows": result.n_rows,
+        },
+        "labels": [str(label) for label in result.label_encoder.classes_],
+        "preparation_version": PREPARATION_VERSION,
+    }
+    _atomic_write_json(card, path)
+    print(f"Saved: {path}")
+    return path
 
 
 def backup_existing_files():
@@ -316,6 +349,7 @@ def main(argv=None):
 
     backup_existing_files()
     save_artifacts(result)
+    write_model_card(result)
 
     print("\nRetraining complete. Triggering live model reload...")
     trigger_model_reload()
@@ -354,6 +388,23 @@ def _evaluate_holdout(
         train_texts=list(X_train_text),
         test_texts=list(X_test_text),
     )
+
+
+def _atomic_write_json(payload, path):
+    """Write JSON through a temp file in the destination directory, then replace,
+    so a reader never sees a half-written card."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    os.close(fd)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def _atomic_joblib_dump(obj, path):

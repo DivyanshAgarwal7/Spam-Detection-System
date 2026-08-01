@@ -43,6 +43,7 @@ from   rate_limiting            import (RateLimitPolicy,
                                         configure_rate_limiting, rate_limit)
 import requests
 from   routes.analytics         import analytics_bp, record_scan
+from   text_preparation         import PREPARATION_VERSION, prepare_text
 from   utils.spamSeverity       import calculate_spam_severity
 
 
@@ -561,6 +562,10 @@ URL_VECTORIZER_PATH = settings.url_vectorizer_path
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
 label_encoder = joblib.load(LABEL_ENCODER_PATH)
+# Loaded here rather than further down so the URL pair can be installed in the
+# serving state below and picked up by a hot reload like everything else.
+url_model = joblib.load(URL_MODEL_PATH)
+url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
 
 from   xai_service              import XAIService
 
@@ -583,11 +588,23 @@ import serving_state
 
 def _build_model_metadata():
     """Fingerprint the currently-on-disk classifier artifacts (issue #1007)."""
-    return model_registry.build_metadata(
+    metadata = model_registry.build_metadata(
         model_path=str(MODEL_PATH),
         vectorizer_path=str(VECTORIZER_PATH),
         label_encoder_path=str(LABEL_ENCODER_PATH),
     )
+    # Surfaced loudly rather than fatally: a contract mismatch degrades accuracy
+    # but the model still answers, and refusing to boot would take the API down
+    # over a metadata disagreement an operator may already be mid-way through
+    # resolving with a retrain.
+    if not metadata.preparation_matches(PREPARATION_VERSION):
+        app.logger.warning(
+            "served model was trained under text-preparation contract %s but %s "
+            "is in force; retrain to restore train-serve parity",
+            metadata.preparation_version,
+            PREPARATION_VERSION,
+        )
+    return metadata
 
 
 def _load_serving_objects():
@@ -606,6 +623,8 @@ def _load_serving_objects():
         "label_encoder": fresh_label_encoder,
         "xai_service": fresh_xai_service,
         "metadata": _build_model_metadata(),
+        "url_model": joblib.load(URL_MODEL_PATH),
+        "url_vectorizer": joblib.load(URL_VECTORIZER_PATH),
     }
 
 
@@ -616,6 +635,8 @@ serving_state.init_state(
     xai_service=xai_service,
     loader=_load_serving_objects,
     metadata=_build_model_metadata(),
+    url_model=url_model,
+    url_vectorizer=url_vectorizer,
 )
 
 
@@ -775,9 +796,6 @@ from   routes.reload            import register_reload_endpoint
 
 register_reload_endpoint(app)
 
-url_model = joblib.load(URL_MODEL_PATH)
-url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
-
 # All models loaded successfully; surface readiness as a scrapeable gauge (#984).
 metrics.set_model_loaded(True)
 
@@ -825,6 +843,7 @@ def heuristic_url_is_malicious(url):
         return True
     tld = host.rsplit(".", 1)[-1] if "." in host else ""
     return tld in SUSPICIOUS_TLDS
+
 
 MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", 5000))
 
@@ -1214,23 +1233,32 @@ def predict():
 
         if text is None or (isinstance(text, str) and not text.strip()):
             with open(LOG_FILE, "a") as f:
-                f.write(f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n")
+                f.write(
+                    f"WARNING: No text provided at {__import__('datetime').datetime.now()}\n"
+                )
             return jsonify({"error": "No text provided"}), 400
 
         if not isinstance(text, str):
-            return jsonify({
-                "error": f"'text' must be a string, got {type(text).__name__}"
-            }), 400
-
+            return (
+                jsonify(
+                    {"error": f"'text' must be a string, got {type(text).__name__}"}
+                ),
+                400,
+            )
 
         # Maximum-length validation before any vectorization/inference work.
         if len(text) > MAX_MESSAGE_LENGTH:
-            return jsonify({
-                "error": (
-                    f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
-                    f"characters (got {len(text)})"
-                )
-            }), 400
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f"'text' exceeds maximum length of {MAX_MESSAGE_LENGTH} "
+                            f"characters (got {len(text)})"
+                        )
+                    }
+                ),
+                400,
+            )
         # Read the live serving objects through the shared state so a
         # POST /reload-model hot-swap is picked up here without a restart
         # (#973). One snapshot per request keeps the model, vectorizer and
@@ -1250,7 +1278,7 @@ def predict():
         # request also repopulates the cache).
         cache_options = {"type": input_type}
         cache_key = predict_cache.make_cache_key(
-            normalizer.normalize(text), serving.version, cache_options
+            prepare_text(text), serving.version, cache_options
         )
         cache_bypass = _cache_bypass_requested()
         if not cache_bypass:
@@ -1288,20 +1316,22 @@ def predict():
         domain_analysis = analyze_text(text)
 
         if input_type == "url":
-            text_vector = url_vectorizer.transform([text])
-            prediction = url_model.predict(text_vector)
+            text_vector = serving.url_vectorizer.transform([text])
+            prediction = serving.url_model.predict(text_vector)
             final_output = URL_LABELS.get(int(prediction[0]), "unknown")
             if final_output == "safe" and heuristic_url_is_malicious(text):
                 final_output = "malicious"
         else:
-            text_vector = serving.vectorizer.transform([text])
+            # Prepared after translation, so the string handed to the vectorizer
+            # is the one the model was trained on regardless of source language.
+            text_vector = serving.vectorizer.transform([prepare_text(text)])
             prediction = serving.model.predict(text_vector)
             final_output = serving.label_encoder.inverse_transform(prediction)[0]
 
         confidence_score = 95.0
         decision_score = None
         try:
-            active_model = url_model if input_type == "url" else serving.model
+            active_model = serving.url_model if input_type == "url" else serving.model
             if hasattr(active_model, "predict_proba"):
                 proba = active_model.predict_proba(text_vector)
                 confidence_score = round(float(max(proba[0])) * 100, 2)
@@ -2283,14 +2313,16 @@ def imap_status():
     if not conn_row:
         return jsonify({"connected": False})
 
-    return jsonify({
-        "connected": True,
-        "host": conn_row["host"],
-        "imap_username": conn_row["imap_username"],
-        "scan_interval_minutes": conn_row["scan_interval_minutes"],
-        "consent_given_at": conn_row["consent_given_at"],
-        "last_scan_at": conn_row["last_scan_at"],
-    })
+    return jsonify(
+        {
+            "connected": True,
+            "host": conn_row["host"],
+            "imap_username": conn_row["imap_username"],
+            "scan_interval_minutes": conn_row["scan_interval_minutes"],
+            "consent_given_at": conn_row["consent_given_at"],
+            "last_scan_at": conn_row["last_scan_at"],
+        }
+    )
 
 
 @app.route("/imap/schedule", methods=["PUT"])
@@ -2304,14 +2336,26 @@ def imap_schedule():
     scan_interval_minutes = data.get("scan_interval_minutes")
 
     if scan_interval_minutes not in imap_store.ALLOWED_INTERVALS:
-        return jsonify({"error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"}), 400
+        return (
+            jsonify(
+                {
+                    "error": f"scan_interval_minutes must be one of {imap_store.ALLOWED_INTERVALS}"
+                }
+            ),
+            400,
+        )
 
     if not imap_store.get_connection(username):
         return jsonify({"error": "No connected inbox found for this account"}), 404
 
     imap_store.update_schedule(username, scan_interval_minutes)
     _schedule_user_job(username, scan_interval_minutes)
-    return jsonify({"message": "Scan schedule updated", "scan_interval_minutes": scan_interval_minutes})
+    return jsonify(
+        {
+            "message": "Scan schedule updated",
+            "scan_interval_minutes": scan_interval_minutes,
+        }
+    )
 
 
 @app.route("/imap/disconnect", methods=["POST"])
@@ -2349,7 +2393,11 @@ def imap_scan_now():
 
     try:
         emails = imap_connector.fetch_imap_emails(
-            conn_row["host"], conn_row["port"], conn_row["imap_username"], password, limit=50
+            conn_row["host"],
+            conn_row["port"],
+            conn_row["imap_username"],
+            password,
+            limit=50,
         )
         scan_results = scan_emails_with_model(emails)
         imap_store.save_scan_results(username, scan_results["emails"])
