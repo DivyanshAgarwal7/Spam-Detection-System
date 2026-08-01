@@ -17,6 +17,11 @@ Each snapshot also carries the :class:`~model_registry.ModelMetadata` describing
 the artifacts currently loaded, refreshed on every reload so ``/model-info`` and
 the per-prediction provenance fields report the live model.
 
+The URL classifier pair travels in the snapshot as well. It is a separate model
+from the text classifier, but it used to live in module globals that a reload
+never touched, which meant a hot swap updated some prediction paths and not
+others.
+
 >>> state = ServingState(
 ...     model="m1", vectorizer="v1", label_encoder="l1", xai_service="x1",
 ...     metadata="meta1",
@@ -57,6 +62,10 @@ class ServingSnapshot:
     # Provenance for the loaded artifacts (model_registry.ModelMetadata). Defaults
     # to None so callers/tests that build a snapshot without provenance still work.
     metadata: Any = None
+    # The URL classifier pair. Optional for the same reason as ``metadata``:
+    # lightweight fakes in the test suite construct snapshots without them.
+    url_model: Any = None
+    url_vectorizer: Any = None
 
 
 # A loader returns the freshly loaded objects (from disk) as a mapping with the
@@ -77,6 +86,8 @@ class ServingState:
         xai_service: Any,
         loader: Loader,
         metadata: Any = None,
+        url_model: Any = None,
+        url_vectorizer: Any = None,
     ) -> None:
         self._lock = threading.RLock()
         self._model = model
@@ -85,6 +96,8 @@ class ServingState:
         self._xai_service = xai_service
         self._loader = loader
         self._metadata = metadata
+        self._url_model = url_model
+        self._url_vectorizer = url_vectorizer
         self._version = 1
 
     def snapshot(self) -> ServingSnapshot:
@@ -96,6 +109,8 @@ class ServingState:
                 self._xai_service,
                 self._version,
                 self._metadata,
+                self._url_model,
+                self._url_vectorizer,
             )
 
     def reload(self) -> ServingSnapshot:
@@ -112,9 +127,12 @@ class ServingState:
             self._vectorizer = fresh["vectorizer"]
             self._label_encoder = fresh["label_encoder"]
             self._xai_service = fresh["xai_service"]
-            # Loaders may omit "metadata" (e.g. lightweight test fakes); fall back
-            # to None rather than requiring every loader to supply provenance.
+            # Loaders may omit "metadata" and the URL pair (e.g. lightweight test
+            # fakes); fall back to None rather than requiring every loader to
+            # supply them.
             self._metadata = fresh.get("metadata")
+            self._url_model = fresh.get("url_model")
+            self._url_vectorizer = fresh.get("url_vectorizer")
             self._version += 1
             return ServingSnapshot(
                 self._model,
@@ -123,6 +141,8 @@ class ServingState:
                 self._xai_service,
                 self._version,
                 self._metadata,
+                self._url_model,
+                self._url_vectorizer,
             )
 
     @property
@@ -145,6 +165,8 @@ def init_state(
     xai_service: Any,
     loader: Loader,
     metadata: Any = None,
+    url_model: Any = None,
+    url_vectorizer: Any = None,
 ) -> ServingState:
     """Install the process-wide serving state and return it."""
     global STATE
@@ -155,5 +177,7 @@ def init_state(
         xai_service=xai_service,
         loader=loader,
         metadata=metadata,
+        url_model=url_model,
+        url_vectorizer=url_vectorizer,
     )
     return STATE

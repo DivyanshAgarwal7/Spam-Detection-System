@@ -79,13 +79,9 @@ class TestMailboxScanning:
         from email_connectors import email_scanner
 
         monkeypatch.setattr(
-            email_scanner,
-            "current_app",
-            SimpleNamespace(
-                vectorizer=snapshot.vectorizer,
-                model=snapshot.model,
-                label_encoder=snapshot.label_encoder,
-            ),
+            email_scanner.serving_state,
+            "STATE",
+            SimpleNamespace(snapshot=lambda: snapshot),
         )
         monkeypatch.setattr(email_scanner, "analyze_headers", None)
 

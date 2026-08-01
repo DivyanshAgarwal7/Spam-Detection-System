@@ -1,7 +1,7 @@
 from   email_header_analyzer    import analyze_headers
-from   flask                    import current_app
 import numpy as np
 from   pathlib                  import Path
+import serving_state
 import sys
 from   text_preparation         import prepare_text
 
@@ -18,14 +18,16 @@ def scan_emails_with_model(emails):
 
     Optionally appends header analysis results (risk_score, trust_level) if headers exist.
     """
-    vectorizer = getattr(current_app, "vectorizer", None)
-    model = getattr(current_app, "model", None)
-    label_encoder = getattr(current_app, "label_encoder", None)
+    # Read through the shared serving state rather than objects pinned on the
+    # application at startup, so a /reload-model hot-swap reaches inbox scans too
+    # instead of leaving them on the model the process booted with.
+    snapshot = serving_state.STATE.snapshot() if serving_state.STATE else None
+    vectorizer = getattr(snapshot, "vectorizer", None)
+    model = getattr(snapshot, "model", None)
+    label_encoder = getattr(snapshot, "label_encoder", None)
 
     if not model or not vectorizer or not label_encoder:
-        raise ValueError(
-            "ML model dependencies are not loaded in the Flask application."
-        )
+        raise ValueError("ML model dependencies are not loaded in the serving state.")
 
     scanned_emails = []
     spam_count = 0

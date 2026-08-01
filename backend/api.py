@@ -562,6 +562,10 @@ URL_VECTORIZER_PATH = settings.url_vectorizer_path
 model = joblib.load(MODEL_PATH)
 vectorizer = joblib.load(VECTORIZER_PATH)
 label_encoder = joblib.load(LABEL_ENCODER_PATH)
+# Loaded here rather than further down so the URL pair can be installed in the
+# serving state below and picked up by a hot reload like everything else.
+url_model = joblib.load(URL_MODEL_PATH)
+url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
 
 from   xai_service              import XAIService
 
@@ -619,6 +623,8 @@ def _load_serving_objects():
         "label_encoder": fresh_label_encoder,
         "xai_service": fresh_xai_service,
         "metadata": _build_model_metadata(),
+        "url_model": joblib.load(URL_MODEL_PATH),
+        "url_vectorizer": joblib.load(URL_VECTORIZER_PATH),
     }
 
 
@@ -629,6 +635,8 @@ serving_state.init_state(
     xai_service=xai_service,
     loader=_load_serving_objects,
     metadata=_build_model_metadata(),
+    url_model=url_model,
+    url_vectorizer=url_vectorizer,
 )
 
 
@@ -787,9 +795,6 @@ app.register_blueprint(analytics_bp)
 from   routes.reload            import register_reload_endpoint
 
 register_reload_endpoint(app)
-
-url_model = joblib.load(URL_MODEL_PATH)
-url_vectorizer = joblib.load(URL_VECTORIZER_PATH)
 
 # All models loaded successfully; surface readiness as a scrapeable gauge (#984).
 metrics.set_model_loaded(True)
@@ -1311,8 +1316,8 @@ def predict():
         domain_analysis = analyze_text(text)
 
         if input_type == "url":
-            text_vector = url_vectorizer.transform([text])
-            prediction = url_model.predict(text_vector)
+            text_vector = serving.url_vectorizer.transform([text])
+            prediction = serving.url_model.predict(text_vector)
             final_output = URL_LABELS.get(int(prediction[0]), "unknown")
             if final_output == "safe" and heuristic_url_is_malicious(text):
                 final_output = "malicious"
@@ -1326,7 +1331,7 @@ def predict():
         confidence_score = 95.0
         decision_score = None
         try:
-            active_model = url_model if input_type == "url" else serving.model
+            active_model = serving.url_model if input_type == "url" else serving.model
             if hasattr(active_model, "predict_proba"):
                 proba = active_model.predict_proba(text_vector)
                 confidence_score = round(float(max(proba[0])) * 100, 2)
