@@ -286,7 +286,7 @@ app.use('/admin/queues', adminAuth, serverAdapter.getRouter());
 
 app.use("/", predictionRoutes);
 app.use("/", emailIntegrationRoutes);
-app.use("/", imapRoutes);
+app.use("/imap", imapRoutes);
 app.use("/", utilityRoutes);
 // Mounted after predictionRoutes so predictionRoutes' existing POST /bulk-predict
 // handler keeps precedence; this only newly exposes GET /bulk-predict/template.
