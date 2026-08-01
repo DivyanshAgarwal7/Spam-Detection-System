@@ -44,15 +44,27 @@ const evoMailRoutes = require('./routes/evoMailRoutes');
 const poisoningRoutes = require('./routes/poisoningRoutes');
 const visualRoutes = require('./routes/visualRoutes');
 const saltingRoutes = require('./routes/saltingRoutes');
+const adversarialRoutes = require('./routes/adversarialRoutes');
+const evoMailRoutes = require('./routes/evoMailRoutes');
+const poisoningRoutes = require('./routes/poisoningRoutes');
+const saltingRoutes = require('./routes/saltingRoutes');
+
 const healthRoutes = require("./routes/healthRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
 const feedbackRoutes = require('./routes/feedbackRoutes');
 const emailIntegrationRoutes = require("./routes/emailIntegrationRoutes");
 const imapRoutes = require("./routes/imapRoutes");
+const federationRoutes = require('./routes/federationRoutes');
 const utilityRoutes = require("./routes/utilityRoutes");
+const bulkPredictRoutes = require("./routes/bulkPredict");
 
 const { configureAxios } = require('./config/axios');
 configureAxios(); // Apply the global axios configuration
+const logStartupTime = (component, startTime) => {
+  const elapsed = Date.now() - startTime;
+  startupLogs.push({ component, elapsed });
+  logger.info(`⏱️ ${component} loaded in ${elapsed}ms`);
+};
 
 const mongoose = require("mongoose");
 const History = require("./models/History");
@@ -74,10 +86,12 @@ app.use('/api/poisoning', poisoningRoutes);
 app.use('/api/visual', visualRoutes);
 app.use('/api/salting', saltingRoutes);
 
+
 // Apply standard throttling to the heavy ML prediction route
 const { apiLimiter } = require('./middleware/rateLimiter');
 app.use('/predict', apiLimiter);
 app.use('/api', feedbackRoutes);
+app.use('/api/federation', federationRoutes);
 
 // Trust the first proxy so express-rate-limit correctly identifies user IPs
 
@@ -273,6 +287,10 @@ app.use("/", predictionRoutes);
 app.use("/", emailIntegrationRoutes);
 app.use("/imap", imapRoutes);
 app.use("/", utilityRoutes);
+// Mounted after predictionRoutes so predictionRoutes' existing POST /bulk-predict
+// handler keeps precedence; this only newly exposes GET /bulk-predict/template.
+// bulkPredict.js's own POST /bulk-predict route is currently shadowed as a result.
+app.use("/", bulkPredictRoutes);
 
 // Versioned routes (v1)
 app.use("/api/v1/auth", authRoutes);
@@ -293,6 +311,11 @@ app.use("/api/chat", chatRoutes);
 app.use("/health", healthRoutes);
 app.use("/api/rules", ruleRoutes);
 app.use("/api/reports", reportRoutes);
+app.use('/api/adversarial', adversarialRoutes);
+app.use('/api/evomail', evoMailRoutes);
+app.use('/api/poisoning', poisoningRoutes);
+app.use('/api/salting', saltingRoutes);
+
 
 
 app.get("/", (req, res) => {

@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { GoogleLogin } from '@react-oauth/google';
 import { Eye, EyeOff } from "lucide-react";
+import SpamLogo from '../assets/SpamLogo.png';
 import '../App.css';
 
 const Register = () => {
