@@ -43,7 +43,7 @@ from   rate_limiting            import (RateLimitPolicy,
                                         configure_rate_limiting, rate_limit)
 import requests
 from   routes.analytics         import analytics_bp, record_scan
-from   text_preparation         import prepare_text
+from   text_preparation         import PREPARATION_VERSION, prepare_text
 from   utils.spamSeverity       import calculate_spam_severity
 
 
@@ -584,11 +584,23 @@ import serving_state
 
 def _build_model_metadata():
     """Fingerprint the currently-on-disk classifier artifacts (issue #1007)."""
-    return model_registry.build_metadata(
+    metadata = model_registry.build_metadata(
         model_path=str(MODEL_PATH),
         vectorizer_path=str(VECTORIZER_PATH),
         label_encoder_path=str(LABEL_ENCODER_PATH),
     )
+    # Surfaced loudly rather than fatally: a contract mismatch degrades accuracy
+    # but the model still answers, and refusing to boot would take the API down
+    # over a metadata disagreement an operator may already be mid-way through
+    # resolving with a retrain.
+    if not metadata.preparation_matches(PREPARATION_VERSION):
+        app.logger.warning(
+            "served model was trained under text-preparation contract %s but %s "
+            "is in force; retrain to restore train-serve parity",
+            metadata.preparation_version,
+            PREPARATION_VERSION,
+        )
+    return metadata
 
 
 def _load_serving_objects():

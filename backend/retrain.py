@@ -21,7 +21,10 @@ Behavior (per README spec):
          - linear_svm_model.pkl
          - tfidf_vectorizer.pkl
          - label_encoder.pkl
-    7. Triggers a live model reload only AFTER a successful save.
+    7. Writes model_card.json alongside them, recording when the model was
+       trained, how it scored, its label set, and the text-preparation contract
+       it was trained under.
+    8. Triggers a live model reload only AFTER a successful save.
 
 Run this from the backend/ directory:
     cd backend
@@ -227,6 +230,36 @@ def save_artifacts(
     print(f"Saved: {label_encoder_path}")
 
 
+def write_model_card(
+    result,
+    *,
+    model_path=MODEL_PATH,
+    card_path=None,
+):
+    """Emit the provenance sidecar the registry reads for ``GET /model-info``.
+
+    Records the preparation contract the artifacts were trained under so a later
+    mismatch between trained and serving text handling is detectable instead of
+    silently degrading predictions. Written after the artifacts, so a card can
+    never describe a model that failed to persist.
+    """
+    path = card_path or os.path.join(
+        os.path.dirname(os.path.abspath(model_path)), MODEL_CARD_FILENAME
+    )
+    card = {
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "metrics": {
+            "holdout_accuracy": round(float(result.holdout.accuracy), 4),
+            "training_rows": result.n_rows,
+        },
+        "labels": [str(label) for label in result.label_encoder.classes_],
+        "preparation_version": PREPARATION_VERSION,
+    }
+    _atomic_write_json(card, path)
+    print(f"Saved: {path}")
+    return path
+
+
 def backup_existing_files():
     """Copy existing .pkl files to a timestamped backup folder before overwriting."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -316,6 +349,7 @@ def main(argv=None):
 
     backup_existing_files()
     save_artifacts(result)
+    write_model_card(result)
 
     print("\nRetraining complete. Triggering live model reload...")
     trigger_model_reload()
@@ -354,6 +388,23 @@ def _evaluate_holdout(
         train_texts=list(X_train_text),
         test_texts=list(X_test_text),
     )
+
+
+def _atomic_write_json(payload, path):
+    """Write JSON through a temp file in the destination directory, then replace,
+    so a reader never sees a half-written card."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    os.close(fd)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def _atomic_joblib_dump(obj, path):

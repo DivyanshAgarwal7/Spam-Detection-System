@@ -26,7 +26,15 @@ True
 
 from   utils.text_normalizer    import normalizer
 
-__all__ = ["prepare_text"]
+__all__ = ["PREPARATION_VERSION", "prepare_text"]
+
+# Identifies the canonical form :func:`prepare_text` produces. Bump it whenever a
+# change to the preparation steps alters the output for any input: artifacts
+# trained under an older version learned a different vocabulary, and serving them
+# under the newer one silently reintroduces the train-serve skew this contract
+# exists to prevent. Recorded in the model card at training time and compared
+# against the served artifacts when they are loaded.
+PREPARATION_VERSION = "1"
 
 
 def prepare_text(text):
