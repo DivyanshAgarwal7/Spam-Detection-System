@@ -12,8 +12,8 @@ Behavior (per README spec):
     1. Loads the original training dataset (DATASET_PATH env var, default: dataset.csv)
     2. Loads feedback_store.csv (the corrected labels submitted via /feedback)
     3. Merges them into one training set (feedback's `correct_label` becomes the label)
-    4. Encodes labels once with a single LabelEncoder and normalizes text with the
-       same normalizer api.py uses at inference time.
+    4. Encodes labels once with a single LabelEncoder and prepares text with the
+       shared contract every inference path applies.
     5. Fits the vectorizer + LinearSVC ONCE on a held-out train split to report an
        honest accuracy, then refits ONCE on the full combined data for the artifacts
        actually written to disk.
@@ -46,7 +46,7 @@ from   sklearn.model_selection  import train_test_split
 from   sklearn.preprocessing    import LabelEncoder
 from   sklearn.svm              import LinearSVC
 
-from   utils.text_normalizer    import normalizer
+from   text_preparation         import prepare_text
 
 VALID_LABELS = {"ham", "spam", "smishing"}
 
@@ -170,13 +170,13 @@ def train(
 ):
     """Deterministic training pipeline.
 
-    Text is normalized with the same normalizer api.py applies at inference, so
-    the vectorizer vocabulary matches what serving will see. Labels are encoded
-    ONCE and the encoded integers are used for every fit -- no raw string labels
-    leak into any model. The held-out fit and the production fit each happen
-    exactly once.
+    Text goes through the shared preparation contract that every inference path
+    also applies, so the vectorizer vocabulary matches what serving will see.
+    Labels are encoded ONCE and the encoded integers are used for every fit -- no
+    raw string labels leak into any model. The held-out fit and the production
+    fit each happen exactly once.
     """
-    normalized = combined["text"].apply(normalizer.normalize)
+    normalized = combined["text"].apply(prepare_text)
 
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(combined["label"])

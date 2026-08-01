@@ -124,7 +124,7 @@ def test_labels_are_encoded_consistently_everywhere(trained):
     assert set(trained.label_encoder.classes_) == retrain.VALID_LABELS
 
     sample = trained.vectorizer.transform(
-        [retrain.normalizer.normalize("free prize claim now")]
+        [retrain.prepare_text("free prize claim now")]
     )
     encoded_pred = trained.model.predict(sample)
     decoded = trained.label_encoder.inverse_transform(encoded_pred)[0]
